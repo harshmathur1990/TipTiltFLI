@@ -9,6 +9,53 @@ FliSdk* fli;
 uint16_t width=512, height=512;
 int nbImages = 0;
 
+class RawImageReceivedObserver : public IRawImageReceivedObserver
+{
+public:
+    RawImageReceivedObserver(uint16_t width, uint16_t height) :
+            _imgSize(width* height),
+            _nbImagesReceived(0)
+    {
+        fli->addRawImageReceivedObserver(this);
+    };
+
+    virtual void imageReceived(const uint8_t* image) override
+    {
+        *imagePointer = (uint16_t *) image;
+        _nbImagesReceived++;
+    }
+
+    virtual uint16_t fpsTrigger() override
+    {
+        return 0;
+    }
+
+    uint32_t getNbImagesReceived()
+    {
+        return _nbImagesReceived;
+    };
+
+    uint16_t* getNextImage() {
+        if (bufferStatus == 0) {
+            imagePointer = &imageBuffer2;
+            bufferStatus = 1;
+            return imageBuffer1;
+        }
+        else {
+            imagePointer = &imageBuffer1;
+            bufferStatus = 0;
+            return imageBuffer2;
+        }
+    };
+
+private:
+    uint32_t _imgSize;
+    uint32_t _nbImagesReceived;
+    uint16_t *imageBuffer1=NULL, *imageBuffer2=NULL;
+    uint16_t **imagePointer=NULL;
+    int bufferStatus=0;
+};
+
 int initDev() {
 
     std::string cameraName;
@@ -75,5 +122,15 @@ int initDev() {
 
 int stopDev() {
     delete fli;
+    return 0;
+}
+
+int startCamera() {
+    fli->start();
+    return 0;
+}
+
+int stopCamera() {
+    fli->stop();
     return 0;
 }

@@ -16,7 +16,7 @@ double *MasterDark;
 double *MasterFlat;
 double *HammingWindow;
 double *CurrentImage;
-double *ReferenceImage;
+double *ReferenceImage=NULL;
 double *CorrelatedImage;
 fftw_plan PlanForward;
 fftw_plan PlanInverse;
@@ -55,85 +55,17 @@ double XIErr = 0, YIErr = 0;
 double XDErr = 0, YDErr = 0;
 double XModVolts[1], YModVolts[1];
 extern FliSdk* fli;
+bool pauseLoop;
+typedef struct {
+    RawImageReceivedObserver *obs=NULL;
+} worker_params;
 
 int applyShifts(double Dpar1, double Dpar2);
+DWORD WINAPI closedLoopThread(LPVOID lparam);
 
 
-class RawImageReceivedObserver : public IRawImageReceivedObserver
-{
-public:
-    RawImageReceivedObserver(uint16_t width, uint16_t height) :
-            _imgSize(width* height),
-            _nbImagesReceived(0)
-    {
-        for (i=0; i<Ni; i++){
-            XPrevCorr.push_back(0.00);
-            YPrevCorr.push_back(0.00);
-            IPrevCorr.push_back(i);
-        }
-        Dpar1 = -6.0/(Nd*(Nd+1));
-        Dpar2 = 12.0/(Nd*(Nd-1)*(Nd+1));
-        cout << "Loading the calibration matrix... " << endl;
-        Err = getCalibrationMatrix();
-        XModVolts[0] = (Vxoff+20.0)/15.0;
-        YModVolts[0] = (Vyoff+20.0)/15.0;
-        shiftsfile.open("." + string(SAVEPATH) + "_Shifts.csv");
-        cout << "Shifts are saved in " << "." + string(SAVEPATH) + "_Shifts.csv" << endl;
-        fli->addRawImageReceivedObserver(this);
-    };
 
-    virtual void imageReceived(const uint8_t* image) override
-    {
-        uint16_t *Image = (uint16_t *) image;
-        logfile << _nbImagesReceived << " Image acquired : " << fname << endl;
-        if (referenceImage == NULL || _nbImagesReceived > NREFREFRESH) {
-            NumRefImage += 1;
-            fname = string(SAVEPATH) + "\\frame_" + string(6 - std::to_string(_nbImagesReceived+1).length(), '0') + to_string(_nbImagesReceived+1) + "_ref.dat";
-            ImOut.open(fname);
-            ImOut.write((char*)Image, 2*NPIX);
-            ImOut.close();
-            processReferenceImage(Image);
-            logfile << NumRefImage << " Reference image processed" << endl;
-        }
-        else {
-            XYIND = getImageShift(Image);
-            logfile << _nbImagesReceived << " Current image processed" << '\n';
-            XTemp = get<0>(XYIND);
-            YTemp = get<1>(XYIND);
-            XPErr = A00*XTemp + A01*YTemp;
-            YPErr = A10*XTemp + A11*YTemp;
-            if (abs(XPErr)>NX/2) XPErr=0;
-            if (abs(YPErr)>NY/2) YPErr=0;
-            applyShifts(Dpar1, Dpar2);
-            shiftsfile <<XTemp << "," << YTemp << "," << XPErr << "," << YPErr << endl ;
-        }
-        Err = setProgressBar(_nbImagesReceived, NFRAMES);
-        _nbImagesReceived++;
-    }
 
-    virtual uint16_t fpsTrigger() override
-    {
-        return 0;
-    }
-
-    uint32_t getNbImagesReceived()
-    {
-        return _nbImagesReceived;
-    };
-
-private:
-    int i;
-    uint32_t _imgSize;
-    uint32_t _nbImagesReceived;
-    uint32_t NumRefImage=0;
-    uint16_t* referenceImage=NULL;
-    uint64_t NFRAMES, NREFREFRESH;
-    ofstream ImOut, shiftsfile;
-    string fname;
-    double XTemp, YTemp;
-    double XPErr = 0, YPErr = 0;
-    double Dpar1, Dpar2;
-};
 
 
 int main () {
@@ -161,6 +93,9 @@ int main () {
     logfile << "Initializing devices and acquiring one-time data" << endl;
     cout << "Searching for the cameras... " << endl;
 	Err = initDev();
+	if (Err != 0) {
+	    exit(Err);
+	}
     Err = getDarkFlat();
     cout << "Creating the window function... " << endl;
     Err = getHammingWindow();
@@ -205,7 +140,29 @@ int main () {
     logfile << "Number of frames to refresh reference : " << NREFREFRESH << endl;
     logfile.close();
     RawImageReceivedObserver obs(width, height);
+    HANDLE myHandle;
+    pauseLoop = false;
+    DWORD myThreadID;
+    worker_params workerParams;
+    workerParams.obs = &obs;
     cout.flush();
+    string slopeString;
+    startCamera();
+    myHandle = CreateThread(0, 0, closedLoopThread, &workerParams, 0, &myThreadID);
+    while(slopeString[0] != 'q' ) {
+        cout << "Press q to quit close loop operation, p to pause and c to continue";
+        if (pauseLoop == true && (slopeString[0] == 'c' || slopeString[0]== 'C')) {
+            pauseLoop = false;
+            startCamera();
+        }
+        if (slopeString[0] == 'p' || slopeString[0] == 'P') {
+            pauseLoop = true;
+            stopCamera();
+        }
+        getline(std::cin, slopeString);
+    }
+    stopCamera();
+    CloseHandle(myHandle);
     // Clearing data
     XShift = Vxoff;
     YShift = Vyoff;
@@ -255,5 +212,61 @@ int applyShifts(double Dpar1, double Dpar2){
 }
 
 
+DWORD WINAPI closedLoopThread(LPVOID lparam){
+    worker_params &workerParams = *(worker_params*)lparam;
+    RawImageReceivedObserver obs = *workerParams.obs;
+    int i, count;
+    uint32_t NumRefImage=0, nbImagesReceived;
+    uint16_t *Image=NULL;
+    uint64_t NREFREFRESH;
+    ofstream ImOut, shiftsfile;
+    string fname;
+    double XTemp, YTemp;
+    double XPErr = 0, YPErr = 0;
+    double Dpar1, Dpar2;
 
-    
+    for (i=0; i<Ni; i++){
+        XPrevCorr.push_back(0.00);
+        YPrevCorr.push_back(0.00);
+        IPrevCorr.push_back(i);
+    }
+    Dpar1 = -6.0/(Nd*(Nd+1));
+    Dpar2 = 12.0/(Nd*(Nd-1)*(Nd+1));
+    cout << "Loading the calibration matrix... " << endl;
+    Err = getCalibrationMatrix();
+    XModVolts[0] = (Vxoff+20.0)/15.0;
+    YModVolts[0] = (Vyoff+20.0)/15.0;
+    shiftsfile.open("." + string(SAVEPATH) + "_Shifts.csv");
+    cout << "Shifts are saved in " << "." + string(SAVEPATH) + "_Shifts.csv" << endl;
+
+    count = 0;
+    startCamera();
+    while(1) {
+        while(pauseLoop == true) {
+        }
+        Image = obs.getNextImage();
+        if (ReferenceImage == NULL || count > NREFREFRESH) {
+            nbImagesReceived = obs.getNbImagesReceived();
+            NumRefImage += 1;
+            fname = string(SAVEPATH) + "\\frame_" + string(6 - std::to_string(nbImagesReceived+1).length(), '0') + to_string(nbImagesReceived+1) + "_ref.dat";
+            ImOut.open(fname);
+            ImOut.write((char*)Image, 2*NPIX);
+            ImOut.close();
+            processReferenceImage(Image);
+            logfile << NumRefImage << " Reference image processed" << endl;
+            count = 0;
+        }
+        else {
+            XYIND = getImageShift(Image);
+            XTemp = get<0>(XYIND);
+            YTemp = get<1>(XYIND);
+            XPErr = A00*XTemp + A01*YTemp;
+            YPErr = A10*XTemp + A11*YTemp;
+            if (abs(XPErr)>NX/2) XPErr=0;
+            if (abs(YPErr)>NY/2) YPErr=0;
+            applyShifts(Dpar1, Dpar2);
+            shiftsfile <<XTemp << "," << YTemp << "," << XPErr << "," << YPErr << endl ;
+            count += 1;
+        }
+    }
+}

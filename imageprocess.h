@@ -136,8 +136,8 @@ tuple<double,double,double,double> getGradientSurfaceFit(double *s) {
     tuple<double,double,double,double> COEFF;
     int i=0, XIND=0, YIND=0;
     for (i=0; i<NPIX; i++){
-        XIND = i%128;
-        YIND = i/128;
+        XIND = i%NX;
+        YIND = i/NX;
         Sz += s[i];
         Szx += XIND*s[i];
         Szy += YIND*s[i];
@@ -271,8 +271,8 @@ int processReferenceImage(uint16_t *Image){
     WY = get<2>(COEFF);
     WXY = get<3>(COEFF);
     for (i=0; i<NPIX; i++){ 
-        XIND = i%128;
-        YIND = i/128;
+        XIND = i%NX;
+        YIND = i/NX;
         ReferenceImage[i] -= W0 + WX*XIND + WY*YIND + WXY*XIND*YIND;
         ReferenceImage[i] *= HammingWindow[i];
     }
@@ -300,8 +300,8 @@ tuple<double, double> getImageShift(uint16_t *Image) {
     WY = get<2>(COEFF);
     WXY = get<3>(COEFF);
     for (i=0; i<NPIX; i++){ // Surface fit & window
-        XIND = i%128;
-        YIND = i/128;
+        XIND = i%NX;
+        YIND = i/NX;
         CurrentImage[i] -= W0 + WX*XIND + WY*YIND + WXY*XIND*YIND;
         CurrentImage[i] *= HammingWindow[i];
     }
