@@ -212,8 +212,8 @@ int processReferenceImage(uint16_t *Image){
     ImageMean=0;
     // Dark, flat and normalize
     for (i=0; i<NPIX; i++){ 
-            // ReferenceImage[i] = (Image[i]-MasterDark[i])*MasterFlat[i];
-            ReferenceImage[i] = (Image[i]-80.00)*1.00;
+             ReferenceImage[i] = (Image[i]-MasterDark[i])*MasterFlat[i];
+//            ReferenceImage[i] = (Image[i]-80.00)*1.00;
             ImageMean += ReferenceImage[i];
     }
     ImageMean = NPIX/ImageMean;
@@ -239,8 +239,8 @@ tuple<double, double> getImageShift(uint16_t *Image) {
     ImageMean = 0;
     // Reduction
     for (i=0; i<NPIX; i++){ // Dark & flat
-        // CurrentImage[i] = (Image[i]-MasterDark[i])*MasterFlat[i];
-        CurrentImage[i] = (Image[i]-80.00)*1.00;
+         CurrentImage[i] = (Image[i]-MasterDark[i])*MasterFlat[i];
+//        CurrentImage[i] = (Image[i]-80.00)*1.00;
         ImageMean += CurrentImage[i];
     }
     ImageMean = NPIX/ImageMean;
