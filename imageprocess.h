@@ -150,92 +150,46 @@ tuple<double,double,double,double> getGradientSurfaceFit(double *s) {
    return COEFF; 
 }
 
+int checkValidCoordinates(int i, int j){
+    if ((i < 0 || i >= NX) || (j < 0 || j >= NY)) {
+        return 0;
+    }
+    return 1;
+}
+
+int getLinearArrayIndice(int i, int j) {
+    return j * NX + i;
+}
+
 tuple<double,double> getSubPixelShift(double *s, int ind) {
-    int XIND = ind%NY, YIND = ind/NX;
+    int XIND = ind%NX, YIND = ind/NX;
     double nn = 0, nz = 0, np = 0, zn = 0, zz = 0, zp = 0, pn = 0, pz = 0, pp = 0;
     double a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0;
     // cout << XIND << " " << YIND << endl;
-    if (YIND == 0){
-        if (XIND == 0){
-            nn = s[16383];
-            nz = s[16256];
-            np = s[16257];
-            zn = s[127];
-            zz = s[0];
-            zp = s[1];
-            pn = s[255];
-            pz = s[128];
-            pp = s[129];
-        }
-        else if (XIND == 127) {
-            nn = s[16382];
-            nz = s[16383];
-            np = s[16256];
-            zn = s[126];
-            zz = s[127];
-            zp = s[128];
-            pn = s[254];
-            pz = s[255];
-            pp = s[256];
-        }
-        else{
-            nn = s[ind+16255];
-            nz = s[ind+16256];
-            np = s[ind+16257];
-            zn = s[ind-1];
-            zz = s[ind];
-            zp = s[ind+1];
-            pn = s[ind+127];
-            pz = s[ind+128];
-            pp = s[ind+129];
+    int i, j, nei_x, nei_y;
+    double coeff[9];
+    int k = 0;
+    for (j=-1;j<2;j++) {
+        for (i=-1;i<2;i++) {
+            nei_y = YIND + j;
+            nei_x = XIND + i;
+            if (nei_x < 0) nei_x += NX;
+            else if (nei_x >= NX) nei_x -= NX;
+            if (nei_y < 0) nei_y += NY;
+            else if (nei_y >= NY) nei_y -= NY;
+            coeff[k] = s[getLinearArrayIndice(nei_x, nei_y)];
+            k += 1;
         }
     }
-    else if (YIND == 127){
-        if (XIND == 0){
-            nn = s[16255];
-            nz = s[16128];
-            np = s[16129];
-            zn = s[16383];
-            zz = s[16256];
-            zp = s[16257];
-            pn = s[127];
-            pz = s[0];
-            pp = s[1];
-        }
-        else if (XIND == 127){
-            nn = s[16254];
-            nz = s[16255];
-            np = s[16128];
-            zn = s[16382];
-            zz = s[16383];
-            zp = s[0];
-            pn = s[126];
-            pz = s[127];
-            pp = s[16256];
-        }
-        else{
-            nn = s[ind-129];
-            nz = s[ind-128];
-            np = s[ind-127];
-            zn = s[ind-1];
-            zz = s[ind];
-            zp = s[ind+1];
-            pn = s[ind-16257];
-            pz = s[ind-16256];
-            pp = s[ind-16255];
-        }
-    }
-    else{
-        nn = s[ind-129];
-        nz = s[ind-128];
-        np = s[ind-127];
-        zn = s[ind-1];
-        zz = s[ind];
-        zp = s[ind+1];
-        pn = s[ind+127];
-        pz = s[ind+128];
-        pp = s[ind+129];
-    }
+    nn = coeff[0];
+    nz = coeff[1];
+    np = coeff[2];
+    zn = coeff[3];
+    zz = coeff[4];
+    zp = coeff[5];
+    pn = coeff[6];
+    pz = coeff[7];
+    pp = coeff[8];
     double xshf = XIND, yshf = YIND;
     if (XIND>63) { xshf = XIND - 128; }
     if (YIND>63) { yshf = YIND - 128; }
