@@ -16,7 +16,7 @@ elseif(LINUX_BUILD)
     set(CMAKE_CXX_FLAGS  "-Wl,-rpath,'\$ORIGIN/../../../../lib/release'")
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -no-pie")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -no-pie")
 
 if(ARM_BUILD)
     link_directories($ENV{FLISDK_DIR}/lib)
@@ -32,3 +32,7 @@ set(SOURCES main.cpp common.h controls.h firstlight.h imageprocess.h)
 add_executable(TipTiltAO ${SOURCES})
 target_include_directories(TipTiltAO PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INCLUDE_FFTW_DIR})
 target_link_libraries(TipTiltAO $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INCLUDE_FFTW_DIR}/libfftw3-3.lib)
+
+add_executable(CalibrateXY calibration.cpp)
+target_include_directories(CalibrateXY PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INCLUDE_FFTW_DIR})
+target_link_libraries(CalibrateXY $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INCLUDE_FFTW_DIR}/libfftw3-3.lib)

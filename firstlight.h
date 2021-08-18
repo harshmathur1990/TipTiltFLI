@@ -56,7 +56,7 @@ private:
     int bufferStatus=0;
 };
 
-int initDev() {
+int initDev(double askfps=0, double asktemp=0) {
 
     std::string cameraName;
     fli = new FliSdk();
@@ -96,13 +96,37 @@ int initDev() {
     }
 
     double fps = fli->cblueSfnc()->AcquisitionFrameRate->getValue();
+    double input=-1;
     cout << "Fps read: " << fps << endl;
+    if (askfps > 0) {
+        while(input < 0 || input > fps) {
+            cout << "Enter fps (<="<< fps <<"): " << endl;
+            cin>>input;
+        }
+        fli->cblueSfnc()->AcquisitionFrameRate->setValue(input);
+        fps = fli->cblueSfnc()->AcquisitionFrameRate->getValue();
+        cout << "Fps read: " << fps << endl;
+        input = -1;
+    }
+
     double temp = fli->cblueSfnc()->DeviceTemperature->getValue();
     cout << "Temp read: " << temp << endl;
-    cout << "Setting Temperature 0"<<endl;
-    fli->cblueSfnc()->DeviceTemperature->setValue(0);
-    temp = fli->cblueSfnc()->DeviceTemperature->getValue();
-    cout << "Temp read: " << temp << endl;
+    if (asktemp > 0) {
+        while(input < 0 || input > 30) {
+            cout << "Enter temp (<="<< 30 <<"): " << endl;
+            cin>>input;
+        }
+        fli->cblueSfnc()->DeviceTemperature->setValue(input);
+        temp = fli->cblueSfnc()->DeviceTemperature->getValue();
+        cout << "Temp read: " << temp << endl;
+    }
+    else {
+        cout << "Setting Temperature 0"<<endl;
+        fli->cblueSfnc()->DeviceTemperature->setValue(0);
+        temp = fli->cblueSfnc()->DeviceTemperature->getValue();
+        cout << "Temp read: " << temp << endl;
+    }
+
 
     fli->cblueSfnc()->ExposureMode->setValue(FliCblueSfncEnum::ExposureModeEnum::Timed);
 
