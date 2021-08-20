@@ -36,3 +36,9 @@ target_link_libraries(TipTiltAO $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUD
 add_executable(CalibrateXY calibration.cpp)
 target_include_directories(CalibrateXY PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INCLUDE_FFTW_DIR})
 target_link_libraries(CalibrateXY $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INCLUDE_FFTW_DIR}/libfftw3-3.lib)
+
+add_executable(VoltageShiftMatrix make_calibration_matrix.cpp)
+
+add_executable(DarkFlat generate_dark_flat.cpp)
+target_include_directories(DarkFlat PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INCLUDE_FFTW_DIR})
+target_link_libraries(DarkFlat $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INCLUDE_FFTW_DIR}/libfftw3-3.lib)

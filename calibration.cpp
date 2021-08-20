@@ -59,6 +59,7 @@ int Err = 1;
 char SAVEPATH[64];
 ofstream logfile;
 ofstream shiftsfile;
+extern FliSdk* fli;
 
 int doCalib(int NFRAMES, int AXIS);
 
