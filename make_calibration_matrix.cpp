@@ -18,9 +18,6 @@ int main(){
     cout.flush();
 
     double *Vx = new double[N], *Vy = new double[N];
-    double *Ox = new double[N], *Oy = new double[N];
-    double *Mxx = new double[N], *Mxy = new double[N];
-    double *Myx = new double[N], *Myy = new double[N];
     double *x = new double[N], *y = new double[N];
     double A00, A01, A10, A11;
 

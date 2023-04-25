@@ -2,27 +2,104 @@
 #define LONG_DELAY 2000
 #include <vector>
 #include <iostream>
+#include <chrono>
+#include <deque>
+#include <mkl.h>
+#include <fftw3.h>
+#include "utilheaders.h"
+#include "mkl_data_types.h"
+#include "imageheaders.h"
 
 using namespace std;
 
 FliSdk* fli;
-uint16_t width=512, height=512;
 int nbImages = 0;
+int fpsCamera;
+char SAVEPATH[64];
+
 
 class RawImageReceivedObserver : public IRawImageReceivedObserver
 {
 public:
-    RawImageReceivedObserver(uint16_t width, uint16_t height) :
-            _imgSize(width* height),
-            _nbImagesReceived(0)
+    RawImageReceivedObserver(
+            void (*workFunction)(uint16_t* const Image, uint64_t nbImagesReceived, double* binImgTime, double* imgWriteTime,
+                                 double* imgShiftTime, double* calcCorrectionTime, double* applyCorrectionTime,
+                                 uint64_t* curr_count, uint64_t* ignore_count, uint64_t NREFRESH, uint64_t* NumRefImage,
+                                 uint64_t* integralCounter, uint64_t* derivativeCounter, bool* breakLoop, uint64_t* counter,
+                                 uint64_t* status_count, float* XShift, float* YShift, uint64_t* error_no,
+                                 deque<double> &integralErrorX, deque<double> &integralErrorY,
+                                 deque<double> &derivativeErrorX, deque<double> &derivativeErrorY,
+                                 double *CurrentImage, fftw_complex *CurrentImageFT,
+                                 fftw_complex *CorrelatedImageFT, double *CorrelatedImage,
+                                 int fpsCamera, uint16_t* const binnedImage, int ACQMODE,
+                                 uint16_t* rotatingCounter
+            ), uint64_t NREFERESH, double XShift, double YShift, int ACQMODE):
+            workFunction(workFunction),
+            NREFRESH(NREFERESH),
+            XShift(XShift), YShift(YShift),
+            ACQMODE(ACQMODE),
+            counter(NREFERESH + 1),
+            _nbImagesReceived(0),
+            t0(chrono::high_resolution_clock::now()),
+            binImgTime(0), imgWriteTime(0), imgShiftTime(0),
+            calcCorrectionTime(0), applyCorrectionTime(0),
+            integralCounter(0), derivativeCounter(0),
+            curr_count(1), ignore_count(0), NumRefImage(0),
+            status_count(0), error_no(0),
+            breakLoop(false), printStats(true),
+            rotatingCounter(0)
     {
+        if (MODE == INTEL_FFT) {
+            int alignment=64;
+            CurrentImage = (double*)mkl_malloc(sizeof(double) * NX * NY, alignment);
+            CurrentImageFT = (fftw_complex*) mkl_malloc(
+                    NPIXFT * sizeof(fftw_complex), alignment);
+            CorrelatedImageFT = (fftw_complex*) mkl_malloc(
+                    NPIXFT * sizeof(fftw_complex), alignment);
+            CorrelatedImage = (double*)mkl_malloc(sizeof(double) * NX * NY, alignment);
+            binnedImage = (uint16_t*)mkl_calloc(NX * NY, sizeof(uint16_t), alignment);
+        }
+        else {
+            CurrentImage = (double*)fftw_malloc(sizeof(double) * NX * NY);
+            CurrentImageFT = (fftw_complex*) fftw_malloc(
+                    NPIXFT * sizeof(fftw_complex));
+            CorrelatedImageFT = (fftw_complex*) fftw_malloc(
+                    NPIXFT * sizeof(fftw_complex));
+            CorrelatedImage = (double*)fftw_malloc(sizeof(double) * NX * NY);
+            binnedImage = (uint16_t*)calloc(NX * NY, sizeof(uint16_t));
+        }
+
         fli->addRawImageReceivedObserver(this);
     };
 
     virtual void imageReceived(const uint8_t* image) override
     {
-        *imagePointer = (uint16_t *) image;
-        _nbImagesReceived++;
+        if (this->_nbImagesReceived == 0) {
+            t0 = chrono::high_resolution_clock::now();
+        }
+        this->imagePointer = (uint16_t *) image;
+        this->_nbImagesReceived = this->_nbImagesReceived + 1;
+//        cout << "Receiving Images" << this->_nbImagesReceived << "\r" << endl;
+        workFunction(
+            this->imagePointer, this->_nbImagesReceived, &binImgTime,
+            &imgWriteTime, &imgShiftTime, &calcCorrectionTime, &applyCorrectionTime,
+            &curr_count, &ignore_count, NREFRESH, &NumRefImage, &integralCounter, &derivativeCounter, &breakLoop,
+            &counter, &status_count, &XShift, &YShift, &error_no,
+            integralErrorX, integralErrorY, derivativeErrorX, derivativeErrorY,
+            CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, fpsCamera,
+            binnedImage, ACQMODE, &rotatingCounter
+        );
+        if ( (printStats == true) & ( (!(this->_nbImagesReceived & ((1 << 13) - 1) )) || breakLoop == true)) {
+            t1 = chrono::high_resolution_clock::now();
+            dt = chrono::duration_cast<chrono::duration<double>>(t1 - t0);
+            fps = (_nbImagesReceived - 1) / dt.count();
+            cout << "FPS: "<< fps << " curr_count :" << curr_count << "\r";
+            cout.flush();
+            if (breakLoop == true) {
+                printStats = false;
+                cout << "error_no: "<< error_no << endl;
+            }
+        }
     }
 
     virtual uint16_t fpsTrigger() override
@@ -30,30 +107,46 @@ public:
         return 0;
     }
 
-    uint32_t getNbImagesReceived()
+    uint64_t getNbImagesReceived()
     {
-        return _nbImagesReceived;
+        return this->_nbImagesReceived;
     };
 
     uint16_t* getNextImage() {
-        if (bufferStatus == 0) {
-            imagePointer = &imageBuffer2;
-            bufferStatus = 1;
-            return imageBuffer1;
-        }
-        else {
-            imagePointer = &imageBuffer1;
-            bufferStatus = 0;
-            return imageBuffer2;
-        }
+        return this->imagePointer;
     };
 
 private:
-    uint32_t _imgSize;
-    uint32_t _nbImagesReceived;
-    uint16_t *imageBuffer1=NULL, *imageBuffer2=NULL;
-    uint16_t **imagePointer=NULL;
-    int bufferStatus=0;
+    uint64_t _nbImagesReceived, iter;
+    uint16_t* imagePointer=NULL;
+    int ACQMODE;
+    void (*workFunction)(uint16_t* Image, uint64_t nbImagesReceived, double* binImgTime, double* imgWriteTime,
+        double* imgShiftTime, double* calcCorrectionTime, double* applyCorrectionTime,
+        uint64_t* curr_count, uint64_t* ignore_count, uint64_t NREFRESH, uint64_t* NumRefImage,
+        uint64_t* integralCounter, uint64_t* derivativeCounter, bool* breakLoop, uint64_t* counter,
+        uint64_t* status_count, float* XShift, float* YShift, uint64_t* error_no,
+        deque<double> &integralErrorX, deque<double> &integralErrorY, deque<double> &derivativeErrorX,
+        deque<double> &derivativeErrorY, double *CurrentImage, fftw_complex *CurrentImageFT,
+        fftw_complex *CorrelatedImageFT, double *CorrelatedImage, int fpsCamera,
+        uint16_t* binnedImage, int ACQMODE, uint16_t* rotatingCounter
+    ) = NULL;
+    chrono::high_resolution_clock::time_point t0, t1;
+    chrono::duration<double> dt;
+    double fps;
+    double binImgTime, imgWriteTime, imgShiftTime, calcCorrectionTime, applyCorrectionTime;
+    uint64_t integralCounter, derivativeCounter, NREFRESH, curr_count, ignore_count, NumRefImage, counter, status_count, error_no;
+    float XShift, YShift;
+    bool breakLoop, printStats;
+    deque<double> integralErrorX;
+    deque<double> integralErrorY;
+    deque<double> derivativeErrorX;
+    deque<double> derivativeErrorY;
+    double *CurrentImage;
+    fftw_complex *CurrentImageFT;
+    fftw_complex *CorrelatedImageFT;
+    double *CorrelatedImage;
+    uint16_t *binnedImage;
+    uint16_t rotatingCounter;
 };
 
 int initDev(double askfps=0, double asktemp=0) {
@@ -85,62 +178,85 @@ int initDev(double askfps=0, double asktemp=0) {
 
     cout << "Setting mode Full." << endl;
     //set full mode
-    fli->setMode(FliSdk::Mode::Full);
-
+    fli->setMode(FliSdk::Mode::GrabOnly);
+    cout << "Done Set mode Full." << endl;
     fli->update();
+    fli->setImageDimension(WIDTH, HEIGHT);
+    fli->update();
+    cout << "Done update." << endl;
 
-    if(!fli->serialCamera() && !fli->cblueSfnc())
+    if(!fli->serialCamera() && !fli->cblueOne())
     {
         cout << "Fatal error." << endl;
         return -1;
     }
 
-    double fps = fli->cblueSfnc()->AcquisitionFrameRate->getValue();
+
+
+    double temp = fli->cblueOne()->DeviceTemperature->getValue();
+    cout << "Temp read: " << temp << endl;
+
+    fli->imageProcessing()->enableAutoExposure(false);
+    fli->update();
+    fli->cblueOne()->ExposureMode->setValue(FliSfncCameraEnum::ExposureModeEnum::Timed);
+//    fli->cblueOne()->E
+
+    cout << "OffsetX: "<< fli->cblueOne()->OffsetX->getValue()<<endl;
+    cout << "OffsetY: "<< fli->cblueOne()->OffsetY->getValue()<<endl;
+
+    uint16_t offsetX=250, offsetY=0;
+    cout <<"Enter offseX: "<<endl;
+    cin>>offsetX;
+    cout <<"Enter offseY: "<<endl;
+    cin>>offsetY;
+    fli->cblueOne()->Width->setValue(WIDTH);
+    fli->cblueOne()->Height->setValue(HEIGHT);
+    fli->cblueOne()->OffsetX->setValue(offsetX);
+    fli->cblueOne()->OffsetY->setValue(offsetY);
+
+    cout << "Width: "<< fli->cblueOne()->Width->getValue()<<endl;
+    cout << "Height: "<< fli->cblueOne()->Height->getValue()<<endl;
+    cout << "OffsetX: "<< fli->cblueOne()->OffsetX->getValue()<<endl;
+    cout << "OffsetY: "<< fli->cblueOne()->OffsetY->getValue()<<endl;
+
+    double fps = fli->cblueOne()->AcquisitionFrameRate->getValue();
     double input=-1;
     cout << "Fps read: " << fps << endl;
     if (askfps > 0) {
-        while(input < 0 || input > fps) {
+        while(input < 0) {
             cout << "Enter fps (<="<< fps <<"): " << endl;
             cin>>input;
         }
-        fli->cblueSfnc()->AcquisitionFrameRate->setValue(input);
-        fps = fli->cblueSfnc()->AcquisitionFrameRate->getValue();
+        fli->cblueOne()->AcquisitionFrameRate->setValue(input);
+        fps = fli->cblueOne()->AcquisitionFrameRate->getValue();
         cout << "Fps read: " << fps << endl;
         input = -1;
     }
 
-    double temp = fli->cblueSfnc()->DeviceTemperature->getValue();
-    cout << "Temp read: " << temp << endl;
-    if (asktemp > 0) {
-        while(input < 0 || input > 30) {
-            cout << "Enter temp (<="<< 30 <<"): " << endl;
-            cin>>input;
-        }
-        fli->cblueSfnc()->DeviceTemperature->setValue(input);
-        temp = fli->cblueSfnc()->DeviceTemperature->getValue();
-        cout << "Temp read: " << temp << endl;
-    }
-    else {
-        cout << "Setting Temperature 0"<<endl;
-        fli->cblueSfnc()->DeviceTemperature->setValue(0);
-        temp = fli->cblueSfnc()->DeviceTemperature->getValue();
-        cout << "Temp read: " << temp << endl;
-    }
-
-
-    fli->cblueSfnc()->ExposureMode->setValue(FliCblueSfncEnum::ExposureModeEnum::Timed);
-
-    double exp = fli->cblueSfnc()->ExposureTime->getValue();
+    double exp = fli->cblueOne()->ExposureTime->getValue();
     cout << "Exposure Time read: " << exp << endl;
     cout << "Enter Exposure Time: ";
     cin >>exp;
-    fli->cblueSfnc()->ExposureTime->setValue(exp);
-    exp = fli->cblueSfnc()->ExposureTime->getValue();
+    fli->cblueOne()->ExposureTime->setValue(exp);
+    fli->imageProcessing()->updateAutoExposureParam();
+    exp = fli->cblueOne()->ExposureTime->getValue();
     cout << "Exposure Time read: " << exp << endl;
 
-    fli->cblueSfnc()->Width->setValue(width);
-    fli->cblueSfnc()->Height->setValue(height);
+    fli->cblueOne()->setStringFeature("NucMode", "BiasFlat");
 
+    string nucmode="something";
+
+    cout << "Width: "<< fli->cblueOne()->Width->getValue()<<endl;
+    cout << "Height: "<< fli->cblueOne()->Height->getValue()<<endl;
+    cout << "OffsetX: "<< fli->cblueOne()->OffsetX->getValue()<<endl;
+    cout << "OffsetY: "<< fli->cblueOne()->OffsetY->getValue()<<endl;
+    exp = fli->cblueOne()->ExposureTime->getValue();
+    cout << "Exposure Time read: " << exp << endl;
+    fps = fli->cblueOne()->AcquisitionFrameRate->getValue();
+    cout << "Fps read: " << fps << endl;
+    fli->cblueOne()->getStringFeature("NucMode", nucmode);
+    cout << "NucMode : "<< nucmode <<endl;
+    fpsCamera = int(fps) + 1;
     return 0;
 }
 

@@ -1,29 +1,14 @@
 #include "firstlight.h"
 #include "imageprocess.h"
 #include "controls.h"
-#include "common.h"
+#include "utilheaders.h"
 
 using namespace std;
 
 // Global variables : imageprocess
-double *MasterDark;
-double *MasterFlat;
-double *HammingWindow;
-double *CurrentImage;
-double *ReferenceImage;
-double *CorrelatedImage;
-fftw_plan PlanForward;
-fftw_plan PlanInverse;
-fftw_complex *CurrentImageFT;
-fftw_complex *ReferenceImageFT;
-fftw_complex *CorrelatedImageFT;
-int XIND=0, YIND=0, MAXIND=16384;
-double W0=0, WX=0, WY=0, WXY=0, ImageMean=0;
-tuple<double, double, double, double> COEFF;
 tuple<double, double> XYIND;
-tuple<fftw_plan, fftw_plan> FFTWPlans;
 double CM[4];
-double XShift, YShift;
+float XShift, YShift;
 double A00;
 double A01;
 double A10;
@@ -36,65 +21,47 @@ double Kd;
 double Ki;
 int Nd;
 int Ni;
+int (*loggingfunc) (std::string) = NULL;
+int (*shiftfunc) (std::string) = NULL;
 // Global variables : serialcom
-string XCommand;
-string YCommand;
-bool COMSEND = FALSE;
-bool STARTTHREAD = TRUE;
 int FRAMENUMBER;
-LPDWORD COMMERROR;
-LPCOMSTAT COMMSTATUS;
-HANDLE XPort, YPort;
-char COMMAND[16];
-DWORD dwBytesWritten;
-int nWriteBytes;
 // Global variables : daqboard
-TaskHandle XDAQHandle=0;
-TaskHandle YDAQHandle=0;
-float64 XData[1] = {0.0};
-float64 YData[1] = {0.0};
 // Global variables : general
 auto TNow = chrono::system_clock::now();
-int Err = 1;
-char SAVEPATH[64];
-ofstream logfile;
-ofstream shiftsfile;
+//char SAVEPATH[64];
 extern FliSdk* fli;
+char logString[100000];
+extern int Err;
 
-int doCalib(int NFRAMES, int AXIS);
+int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS);
 
 int main () {
-    logfile.open(".\\log.txt");
-    logfile << "Allocating memory for various parameters" << endl;
+    setupLogging(1);
+    std::sprintf(logString, "Allocating memory for various parameters");
+    log(logString);
     // Memory allocation for external variables
-    MasterDark = (double*) malloc(sizeof(double)*NPIX);
-    MasterFlat = (double*) malloc(sizeof(double)*NPIX);
-    HammingWindow = (double*) malloc(sizeof(double)*NPIX);
-    CurrentImage = (double*) fftw_malloc(sizeof(double) * NPIX);
-    ReferenceImage = (double*) fftw_malloc(sizeof(double) * NPIX);
-    CorrelatedImage = (double*) fftw_malloc(sizeof(double) * NPIX);
-    CurrentImageFT = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * NPIXFT);
-    ReferenceImageFT = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * NPIXFT);
-    CorrelatedImageFT = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * NPIXFT);
-    Err = getDarkFlat();
     // Other variables
-    int Loop=1, NFRAMES=10;
+    int Loop=1, NFRAMES=10, NUM_FRAME_PER_CALIB_POS=1;
     double ExpTime = 0.0001;
     COMMAND[14] = 13; // CR
     COMMAND[15] = 10; // LF
 
     // Initialization for high speed
-    logfile << "Initializing devices and acquiring one-time data" << endl;
+    std::sprintf(logString, "Initializing devices and acquiring one-time data");
+    log(logString);
     initDev(1);
-    Err = getDarkFlat();
-    for(int i=0; i<NPIX; i++) MasterFlat[i] = 1.0;
+//    Err = getDarkFlat();
+//    for(int i=0; i<NPIX; i++) MasterFlat[i] = 1.0;
     Err = getHammingWindow();
-    Err = getFFTWPlans();
+    Err = initializeFFT();
+    if (Err != 0) {
+        Err = stopDev();
+        return -1;
+    }
     Err = openXYSerialPorts();
-    sendCommand(XPort, "set,0,-20.0");
-    sendCommand(YPort, "set,0,-20.0");
-
-    logfile.close();
+    loggingfunc = log;
+    sendCommand(XPort, "set,0, -20.0");
+    sendCommand(YPort, "set,0, -20.0");
 
     startCamera();
 
@@ -103,33 +70,36 @@ int main () {
         Loop = 0;
 
         // Input: AOI (TRUE/FALSE), Global Shutter (TRUE/FALSE), Exposure time (Seconds)
-        cout << "Enter exposure time in seconds : ";
-        cin >> ExpTime;
-        cout.flush();
+//        cout << "Enter exposure time in seconds : ";
+//        cin >> ExpTime;
+//        cout.flush();
         // Acquisition and computation
         cout << "Number of frames : ";
         cin >> NFRAMES;
         cout.flush();
+        cout << "Number of frames per calib position (default: 1): ";
+        cin >> NUM_FRAME_PER_CALIB_POS;
+        cout.flush();
 
         // Auto-save dir
-        Err = getDateTimeDirName();
-        Err = CreateDirectory(SAVEPATH ,NULL);
 
         cout << "Starting X Calibration... " << endl;
-        logfile.open(string(SAVEPATH) + "\\Ylog.txt");
-        logfile << "X-Calibration Log" << endl;
-        logfile << "Exposure time is set to : " << ExpTime << " seconds" << endl;
-        logfile << "Number of frames are " << NFRAMES << endl;
-        Err = doCalib(NFRAMES, 0);
-        logfile.close();
+        sprintf(logString, "X-Calibration Log");
+        xlog(logString);
+        sprintf(logString, "Number of frames are %d", NFRAMES);
+        xlog(logString);
+        sprintf(logString, "Number of frames per calib position are %d", NUM_FRAME_PER_CALIB_POS);
+        xlog(logString);
+        Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 0);
 
         cout << "Starting Y Calibration... " << endl;
-        logfile.open(string(SAVEPATH) + "\\Xlog.txt");
-        logfile << "Y-Calibration Log" << endl;
-        logfile << "Exposure time is set to : " << ExpTime << "seconds" << endl;
-        logfile << "Number of frames are " << NFRAMES << endl;
-        Err = doCalib(NFRAMES, 1);
-        logfile.close();
+        sprintf(logString, "Y-Calibration Log");
+        ylog(logString);
+        sprintf(logString, "Number of frames are ", NFRAMES);
+        ylog(logString);
+        sprintf(logString, "Number of frames per calib position are %d", NUM_FRAME_PER_CALIB_POS);
+        ylog(logString);
+        Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 1);
 
         // Option to continue acquisition
         cout << "Press 1 to continue calibration... ";
@@ -138,9 +108,9 @@ int main () {
 
     }
     stopCamera();
-    fftw_destroy_plan(PlanForward);
-    fftw_destroy_plan(PlanInverse);
-    fftw_cleanup();
+//    fftw_destroy_plan(PlanForward);
+//    fftw_destroy_plan(PlanInverse);
+//    fftw_cleanup();
     Err = stopDev();
     Err = closeXYSerialPorts();
     cout << "Press a key and then enter to exit." << endl;
@@ -149,28 +119,37 @@ int main () {
     return 0;
 }
 
-int doCalib(int NFRAMES, int AXIS){
+int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS){
     chrono::high_resolution_clock::time_point t0, t1;
     chrono::duration<double> dt;
-    int i, j, k;
+    int i, j, k, ll;
     unsigned char Current = 0;
     string fname;
-    ofstream ImOut;
+    FILE *fp;
     string Command;
     string Axis;
     uint16_t* Image = NULL;
-    if (AXIS==0) Axis="X" ;
-    else Axis="Y" ;
+    uint16_t* binnedImage = (uint16_t*)calloc(NPIX, sizeof(uint16_t));
+    char tempLogString[10000];
+    double shift_x=0, shift_y=0;
+    if (AXIS==0) {
+        Axis = "X";
+        loggingfunc = &xlog;
+        shiftfunc = &xvoltagefilelog;
+    }
+    else {
+        Axis = "Y";
+        loggingfunc = &ylog;
+        shiftfunc = &yvoltagefilelog;
+    }
 
     // DAQ
     Err = initDAQ();
     XShift = 0.0;
     YShift = 0.0;
-    setVoltagesXY();
+    setVoltagesXY(XShift, YShift);
 
     // Set calibration range
-    string ShiftFileName = Axis + "VoltageOnly.csv";
-    shiftsfile.open(string(SAVEPATH) + "\\" + ShiftFileName);
     double VSTART = -10.0;
     cout << "Enter starting voltage for calibration (-20.0V to 110.0V)... ";
     cin >> VSTART;
@@ -194,7 +173,7 @@ int doCalib(int NFRAMES, int AXIS){
         YShift = VSTART;
     }
     FRAMENUMBER = 1;
-    setVoltagesXY();
+    setVoltagesXY(XShift, YShift);
     Sleep(LONG_DELAY);
 
     // Start acquisition
@@ -204,37 +183,78 @@ int doCalib(int NFRAMES, int AXIS){
 
     // Reference Image
     Image = (uint16_t*)fli->getRawImage();
+    bin_separately(Image, binnedImage);
     fname = string(SAVEPATH) + "\\" + Axis + "_frame_" + string(6 - std::to_string(i+1).length(), '0') + to_string(i+1) + "_Ref.dat";
-    logfile << "Image acquired : " << fname << endl;
+    sprintf(logString, "Image acquired : %s", fname.c_str());
+    loggingfunc(logString);
 
     // Shift the image
-    shiftsfile << XShift << "," << YShift << "," << 0 << "," << 0 << endl;
-    // shiftsfile << ", XVoltage-YVoltage-XPixShift-YPixShift in that order" << endl;
+    sprintf(logString, "%lf,%lf,0,0", XShift, YShift);
+    shiftfunc(logString);
+
     if (AXIS == 0) XShift += VRANGE/NFRAMES;
     else YShift += VRANGE/NFRAMES;
-    Err = setVoltagesXY();
+    Err = setVoltagesXY(XShift, YShift);
+
 
     // Process the reference image
-    Err = processReferenceImage(Image);
-    ImOut.open(fname);
-    ImOut.write((char*)Image, 2*NPIX);
-    ImOut.close();
+    Err = processReferenceImage(binnedImage, 0);
+    fp = fopen(fname.c_str(), "wb");
+    fwrite(binnedImage, sizeof(binnedImage), NPIX, fp);
+    fclose(fp);
     Current++;
+    double *CurrentImage;
+    fftw_complex* CurrentImageFT;
+    fftw_complex* CorrelatedImageFT;
+    double* CorrelatedImage;
+    if (MODE == INTEL_FFT) {
+        CurrentImage = (double*) mkl_malloc(sizeof(double) * NX * NY, 64);
+        CurrentImageFT = (fftw_complex* ) mkl_malloc(sizeof(fftw_complex) * NPIXFT, 64);
+        CorrelatedImageFT = (fftw_complex*)mkl_malloc(sizeof(fftw_complex) * NPIXFT, 64);
+        CorrelatedImage = (double*) mkl_malloc(sizeof(double ) * NX * NY, 64);
+    }
+    else {
+        CurrentImage = (double*) fftw_malloc(sizeof(double) * NX * NY);
+        CurrentImageFT = (fftw_complex* ) fftw_malloc(sizeof(fftw_complex) * NPIXFT);
+        CorrelatedImageFT = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * NPIXFT);
+        CorrelatedImage = (double*) calloc(sizeof(double ), NX * NY);
+    }
 
     // Subsequent images
     for (i = 1; i < NFRAMES; i++) {
+        shift_x=0;
+        shift_y=0;
+        sprintf(tempLogString, "%lf,%lf,", XShift, YShift);
+        for (ll=0;ll<NUM_FRAME_PER_CALIB_POS;ll++) {
+            Image = (uint16_t*)fli->getRawImage();
+            bin_separately(Image, binnedImage);
+            fname = string(SAVEPATH) + "\\" + Axis + "_frame_" + string(6 - std::to_string(i+1).length(), '0') + to_string(i+1) + "_" + string(6 - std::to_string(ll+1).length(), '0') + to_string(ll+1) + "_Cur.dat";
+            sprintf(logString, "Image acquired : %s", fname.c_str());
+            loggingfunc(logString);
+            XYIND = getImageShift(
+                    binnedImage, 0, 1,
+                    CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, ll);
+            shift_x += get<0>(XYIND);
+            shift_y += get<1>(XYIND);
+            fp = fopen(fname.c_str(), "wb");
+            fwrite(binnedImage, sizeof(*binnedImage), NPIX, fp);
+            fclose(fp);
+        }
 
         // Wait for next image
-        Image = (uint16_t*)fli->getRawImage();
-        fname = string(SAVEPATH) + "\\" + Axis + "_frame_" + string(6 - std::to_string(i+1).length(), '0') + to_string(i+1) + "_Cur.dat";
-        logfile << "Image acquired : " << fname << endl;
+//        Image = (uint16_t*)fli->getRawImage();
+//        bin_image(Image, binnedImage, width, height);
+//        fname = string(SAVEPATH) + "\\" + Axis + "_frame_" + string(6 - std::to_string(i+1).length(), '0') + to_string(i+1) + "_Cur.dat";
+//        sprintf(logString, "Image acquired : %s", fname.c_str());
+//        loggingfunc(logString);
 
         // Apply shifts
-        shiftsfile << XShift << "," << YShift << ",";
+
+//        sprintf(tempLogString, "%lf,%lf,", XShift, YShift);
         if (AXIS == 0) XShift += VRANGE/NFRAMES;
         else YShift += VRANGE/NFRAMES;
         FRAMENUMBER++;
-        Err = setVoltagesXY();
+        Err = setVoltagesXY(XShift, YShift);
 
         // Status bar
         cout << " ";
@@ -243,33 +263,26 @@ int doCalib(int NFRAMES, int AXIS){
         cout.flush();
 
         // Process the current image
-        XYIND = getImageShift(Image);
-        shiftsfile << get<0>(XYIND) << "," << get<1>(XYIND) << endl;
-        ImOut.open(fname);
-        ImOut.write((char*)Image, 2*NPIX);
-        ImOut.close();
+//        XYIND = getImageShift(binnedImage);
+        sprintf(logString, "%s%lf,%lf", tempLogString, shift_x, shift_y);
+        shiftfunc(logString);
+
+
         Current++;
     }
     cout << " ";
     for (k=0; k<50; k++) cout << '=';
     cout << "  100%\r" << endl;
     cout.flush();
-    shiftsfile.close();
+
     t1 = chrono::high_resolution_clock::now();
     dt = chrono::duration_cast<chrono::duration<double>>(t1 - t0);
     cout << "Number of frames: " << NFRAMES << ", In seconds: " << dt.count() << endl;
     cout << "Frame rate: " << NFRAMES/dt.count() << endl;
-    logfile << "Number of frames: " << NFRAMES << ", In seconds: " << dt.count() << endl;
-    logfile << "Frame rate: " << NFRAMES/dt.count() << endl;
-
-    // Copy the shifts file to current directory for immediate use
-    ifstream  SOURCE(string(SAVEPATH) + "\\" + ShiftFileName, ios::binary);
-    ofstream  DESTINY(ShiftFileName, ios::binary);
-    DESTINY << SOURCE.rdbuf();
-    SOURCE.close();
-    DESTINY.close();
+    sprintf(logString, "Number of frames: %d %s %d", NFRAMES,", In seconds: ", dt.count());
+    loggingfunc(logString);
+    sprintf(logString, "Frame rate: %d", NFRAMES/dt.count());
+    loggingfunc(logString);
     Err = closeDAQ();
     return 0;
 }
-
-
