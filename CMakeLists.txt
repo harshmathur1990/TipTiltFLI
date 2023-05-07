@@ -44,12 +44,12 @@ set(INTEL_FFTWLINK C:/PROGRA~2/Intel/oneAPI/mkl/2023.1.0/lib/intel64)
 set(INTEL_FFTW_INCLUDE C:/PROGRA~2/Intel/oneAPI/mkl/2023.1.0/include)
 set(INTEL_FFTWLINKLIB ${INTEL_FFTWLINK}/mkl_intel_lp64.lib ${INTEL_FFTWLINK}/mkl_core.lib ${INTEL_FFTWLINK}/mkl_sequential.lib)
 
-set(SOURCES main.cpp controls.h firstlight.h imageprocess.h utilheaders.h utils.cpp mkl_data_types.h imageheaders.h)
+set(SOURCES main.cpp controls.h firstlight.h imageprocess.h utilheaders.h utils.cpp mkl_data_types.h imageheaders.h serialconnection.h serialconnection.cpp motorcontrols.h motorcontrols.cpp)
 add_executable(TipTiltAO ${SOURCES})
 target_include_directories(TipTiltAO PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INTEL_FFTW_INCLUDE} ${FFTW})
 target_link_libraries(TipTiltAO $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INTEL_FFTWLINKLIB} ${FFTWLINK})
 
-add_executable(CalibrateXY calibration.cpp utilheaders.h utils.cpp imageheaders.h)
+add_executable(CalibrateXY calibration.cpp utilheaders.h utils.cpp imageheaders.h serialconnection.h serialconnection.cpp motorcontrols.h motorcontrols.cpp)
 target_include_directories(CalibrateXY PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INTEL_FFTW_INCLUDE} ${FFTW})
 target_link_libraries(CalibrateXY $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INTEL_FFTWLINKLIB} ${FFTWLINK})
 

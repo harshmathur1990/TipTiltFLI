@@ -127,8 +127,8 @@ int main(){
     A11 = idetCM*Slope_xVx;
 
     ofstream cm("CalibrationMatrix.csv");
-    cm << A00 << "," << A01 << "," << A10 << "," << A11 << endl;
-    cm << Slope_xVx << "," << Slope_xVy << "," << Slope_yVx << "," << Slope_yVy << endl;
+    cm << A00 << "," << A10 << "," << A01 << "," << A11 << endl;
+    cm << Slope_xVx << "," << Slope_yVx << "," << Slope_xVy << "," << Slope_yVy << endl;
     cm << "0.0, 0.0, 5.0" << endl; // Default Vxoffset, Vyoffset, Slew rate,
     cm << "0.5, 0.5, 0.0" << endl; // Kp, Kd and Ki
     cm << "300, 5" << endl; // Ni, nd

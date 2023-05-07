@@ -37,6 +37,7 @@ TaskHandle XDAQHandle;
 extern double Vxoff, Vyoff, SlewRate;
 extern double Kp, Kd, Ki;
 extern int Nd, Ni;
+extern double AA00, AA01, AA10, AA11; // Autoguider control matrix
 extern int (*loggingfunc) (std::string);
 extern char logString[100000];
 
@@ -46,7 +47,7 @@ HANDLE getSerialHandle(const char* COMPort);
 int sendCommand(HANDLE SerialHandle, string Command);
 int initDAQ();
 int closeDAQ();
-inline int setVoltagesXY(float, float);
+inline int setVoltagesXY(double, double);
 int getCalibrationMatrix();
 double XData[2];
 double YData[1];
@@ -147,7 +148,7 @@ int initDAQ(){
                                                                                    0, 10, DAQmx_Val_Volts, ""));
     loggingfunc(logString);
 
-//    sprintf(logString, "Configuring Hardware Timed Output for X/Y : %d", DAQmxCfgOutputBuffer(XDAQHandle, 0));
+//    sprintf(logString, "Configuring Buffer as 1 for X/Y : %d", DAQmxCfgOutputBuffer(XDAQHandle, 1));
 //    loggingfunc(logString);
 
     sprintf(logString, "Initializing the DAQ handle for X : %d", DAQmxStartTask(XDAQHandle));
@@ -177,7 +178,7 @@ int initDAQ(){
     return 0;
 }
 
-inline int setVoltagesXY(float XShift, float YShift){
+inline int setVoltagesXY(double XShift, double YShift){
     int32 sampsPerChanWritten=0;
 
 //    float64 YData[1];
@@ -194,7 +195,7 @@ inline int setVoltagesXY(float XShift, float YShift){
 //    loggingfunc(logString);
 //    t0 = chrono::high_resolution_clock::now();
     DAQmxWriteAnalogF64(
-            XDAQHandle, 1, 1, 0.0, DAQmx_Val_GroupByChannel, XData, NULL, NULL);
+            XDAQHandle, 1, 0, 0.0, DAQmx_Val_GroupByChannel, XData, NULL, NULL);
 //    DAQmxWriteAnalogF64(
 //            YDAQHandle, 1, 1, 0.0, DAQmx_Val_GroupByScanNumber, YData, NULL, NULL);
 //    t1 = chrono::high_resolution_clock::now();
@@ -313,6 +314,22 @@ int getCalibrationMatrix(){
     log(logString);
     sprintf(logString, "Numer of points to compute differential error : %d",Nd);
     log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    AA00 = stoi(Value);
+    getline(Row, Value, ',');
+    AA01 = stoi(Value);
+    getline(Row, Value, ',');
+    AA10 = stoi(Value);
+    getline(Row, Value, ',');
+    AA11 = stoi(Value);
+
+    sprintf(logString, "Autoguider control matrix is : %.2f, %.2f, %.2f, %.2f", AA00, AA01, AA10, AA11);
+    log(logString);
+
+
     calmat.close();
     return 0;
 }

@@ -26,14 +26,15 @@ public:
                                  double* imgShiftTime, double* calcCorrectionTime, double* applyCorrectionTime,
                                  uint64_t* curr_count, uint64_t* ignore_count, uint64_t NREFRESH, uint64_t* NumRefImage,
                                  uint64_t* integralCounter, uint64_t* derivativeCounter, bool* breakLoop, uint64_t* counter,
-                                 uint64_t* status_count, float* XShift, float* YShift, uint64_t* error_no,
+                                 uint64_t* status_count, double* XShift, double* YShift, uint64_t* error_no,
                                  deque<double> &integralErrorX, deque<double> &integralErrorY,
                                  deque<double> &derivativeErrorX, deque<double> &derivativeErrorY,
                                  double *CurrentImage, fftw_complex *CurrentImageFT,
                                  fftw_complex *CorrelatedImageFT, double *CorrelatedImage,
                                  int fpsCamera, uint16_t* const binnedImage, int ACQMODE,
-                                 uint16_t* rotatingCounter
-            ), uint64_t NREFERESH, double XShift, double YShift, int ACQMODE):
+                                 uint16_t* rotatingCounter, double *sumX, double *sumY,
+                                 int AUTOGUIDERMODE
+            ), uint64_t NREFERESH, double XShift, double YShift, int ACQMODE, int AUTOGUIDERMODE):
             workFunction(workFunction),
             NREFRESH(NREFERESH),
             XShift(XShift), YShift(YShift),
@@ -44,10 +45,10 @@ public:
             binImgTime(0), imgWriteTime(0), imgShiftTime(0),
             calcCorrectionTime(0), applyCorrectionTime(0),
             integralCounter(0), derivativeCounter(0),
-            curr_count(1), ignore_count(0), NumRefImage(0),
+            curr_count(0), ignore_count(0), NumRefImage(0),
             status_count(0), error_no(0),
             breakLoop(false), printStats(true),
-            rotatingCounter(0)
+            rotatingCounter(0), sumX(0), sumY(0), AUTOGUIDERMODE(AUTOGUIDERMODE)
     {
         if (MODE == INTEL_FFT) {
             int alignment=64;
@@ -77,6 +78,17 @@ public:
         if (this->_nbImagesReceived == 0) {
             t0 = chrono::high_resolution_clock::now();
         }
+        if ( (printStats == true) & ( (!(this->_nbImagesReceived & ((1 << 12) - 1) )) || breakLoop == true)) {
+            t1 = chrono::high_resolution_clock::now();
+            dt = chrono::duration_cast<chrono::duration<double>>(t1 - t0);
+            fps = (_nbImagesReceived) / dt.count();
+            cout << "FPS: "<< fps << " curr_count :" << curr_count << "\r";
+            cout.flush();
+            if (breakLoop == true) {
+                printStats = false;
+                cout << "error_no: "<< error_no << endl;
+            }
+        }
         this->imagePointer = (uint16_t *) image;
         this->_nbImagesReceived = this->_nbImagesReceived + 1;
 //        cout << "Receiving Images" << this->_nbImagesReceived << "\r" << endl;
@@ -87,19 +99,9 @@ public:
             &counter, &status_count, &XShift, &YShift, &error_no,
             integralErrorX, integralErrorY, derivativeErrorX, derivativeErrorY,
             CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, fpsCamera,
-            binnedImage, ACQMODE, &rotatingCounter
+            binnedImage, ACQMODE, &rotatingCounter, &sumX, &sumY, AUTOGUIDERMODE
         );
-        if ( (printStats == true) & ( (!(this->_nbImagesReceived & ((1 << 13) - 1) )) || breakLoop == true)) {
-            t1 = chrono::high_resolution_clock::now();
-            dt = chrono::duration_cast<chrono::duration<double>>(t1 - t0);
-            fps = (_nbImagesReceived - 1) / dt.count();
-            cout << "FPS: "<< fps << " curr_count :" << curr_count << "\r";
-            cout.flush();
-            if (breakLoop == true) {
-                printStats = false;
-                cout << "error_no: "<< error_no << endl;
-            }
-        }
+
     }
 
     virtual uint16_t fpsTrigger() override
@@ -116,26 +118,35 @@ public:
         return this->imagePointer;
     };
 
+    void setACQMODE(int ACQMODE) {
+        this->ACQMODE = ACQMODE;
+    };
+
+    void setAUTOGUIDERMODE(int AUTOGUIDERMODE) {
+        this->AUTOGUIDERMODE = AUTOGUIDERMODE;
+    };
+
 private:
     uint64_t _nbImagesReceived, iter;
     uint16_t* imagePointer=NULL;
-    int ACQMODE;
+    int ACQMODE, AUTOGUIDERMODE;
     void (*workFunction)(uint16_t* Image, uint64_t nbImagesReceived, double* binImgTime, double* imgWriteTime,
         double* imgShiftTime, double* calcCorrectionTime, double* applyCorrectionTime,
         uint64_t* curr_count, uint64_t* ignore_count, uint64_t NREFRESH, uint64_t* NumRefImage,
         uint64_t* integralCounter, uint64_t* derivativeCounter, bool* breakLoop, uint64_t* counter,
-        uint64_t* status_count, float* XShift, float* YShift, uint64_t* error_no,
+        uint64_t* status_count, double* XShift, double* YShift, uint64_t* error_no,
         deque<double> &integralErrorX, deque<double> &integralErrorY, deque<double> &derivativeErrorX,
         deque<double> &derivativeErrorY, double *CurrentImage, fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, int fpsCamera,
-        uint16_t* binnedImage, int ACQMODE, uint16_t* rotatingCounter
+        uint16_t* binnedImage, int ACQMODE, uint16_t* rotatingCounter, double *sumX, double *sumY,
+        int AUTOGUIDERMODE
     ) = NULL;
     chrono::high_resolution_clock::time_point t0, t1;
     chrono::duration<double> dt;
     double fps;
-    double binImgTime, imgWriteTime, imgShiftTime, calcCorrectionTime, applyCorrectionTime;
+    double binImgTime, imgWriteTime, imgShiftTime, calcCorrectionTime, applyCorrectionTime, sumX, sumY;
     uint64_t integralCounter, derivativeCounter, NREFRESH, curr_count, ignore_count, NumRefImage, counter, status_count, error_no;
-    float XShift, YShift;
+    double XShift, YShift;
     bool breakLoop, printStats;
     deque<double> integralErrorX;
     deque<double> integralErrorY;

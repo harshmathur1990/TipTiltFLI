@@ -2,13 +2,15 @@
 #include "imageprocess.h"
 #include "controls.h"
 #include "utilheaders.h"
-
+#include "motorcontrols.h"
+#define ACTUATOR 0
+#define MOTOR 1
 using namespace std;
 
 // Global variables : imageprocess
 tuple<double, double> XYIND;
 double CM[4];
-float XShift, YShift;
+double XShift, YShift;
 double A00;
 double A01;
 double A10;
@@ -21,6 +23,7 @@ double Kd;
 double Ki;
 int Nd;
 int Ni;
+double AA00, AA01, AA10, AA11; // Autoguider control matrix
 int (*loggingfunc) (std::string) = NULL;
 int (*shiftfunc) (std::string) = NULL;
 // Global variables : serialcom
@@ -33,7 +36,7 @@ extern FliSdk* fli;
 char logString[100000];
 extern int Err;
 
-int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS);
+int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE);
 
 int main () {
     setupLogging(1);
@@ -41,7 +44,7 @@ int main () {
     log(logString);
     // Memory allocation for external variables
     // Other variables
-    int Loop=1, NFRAMES=10, NUM_FRAME_PER_CALIB_POS=1;
+    int Loop=1, NFRAMES=10, NUM_FRAME_PER_CALIB_POS=1, MODE=ACTUATOR;
     double ExpTime = 0.0001;
     COMMAND[14] = 13; // CR
     COMMAND[15] = 10; // LF
@@ -80,6 +83,9 @@ int main () {
         cout << "Number of frames per calib position (default: 1): ";
         cin >> NUM_FRAME_PER_CALIB_POS;
         cout.flush();
+        cout << "Enter mode for calibration (0: ACTUATOR, 1: MOTOR): ";
+        cin >> MODE;
+        cout.flush();
 
         // Auto-save dir
 
@@ -90,7 +96,7 @@ int main () {
         xlog(logString);
         sprintf(logString, "Number of frames per calib position are %d", NUM_FRAME_PER_CALIB_POS);
         xlog(logString);
-        Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 0);
+        Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 0, MODE);
 
         cout << "Starting Y Calibration... " << endl;
         sprintf(logString, "Y-Calibration Log");
@@ -99,7 +105,7 @@ int main () {
         ylog(logString);
         sprintf(logString, "Number of frames per calib position are %d", NUM_FRAME_PER_CALIB_POS);
         ylog(logString);
-        Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 1);
+        Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 1, MODE);
 
         // Option to continue acquisition
         cout << "Press 1 to continue calibration... ";
@@ -119,10 +125,10 @@ int main () {
     return 0;
 }
 
-int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS){
+int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
     chrono::high_resolution_clock::time_point t0, t1;
     chrono::duration<double> dt;
-    int i, j, k, ll;
+    int i, j, k, ll, motor;
     unsigned char Current = 0;
     string fname;
     FILE *fp;
@@ -136,18 +142,24 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS){
         Axis = "X";
         loggingfunc = &xlog;
         shiftfunc = &xvoltagefilelog;
+        motor = 2;
     }
     else {
         Axis = "Y";
         loggingfunc = &ylog;
         shiftfunc = &yvoltagefilelog;
+        motor = 1;
     }
+
+
 
     // DAQ
     Err = initDAQ();
-    XShift = 0.0;
-    YShift = 0.0;
-    setVoltagesXY(XShift, YShift);
+    CreateControllerConnection(1);
+    enableMotor(1);
+    enableMotor(2);
+    setMotorFrequency(1, 350);
+    setMotorFrequency(2, 350);
 
     // Set calibration range
     double VSTART = -10.0;
@@ -173,7 +185,14 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS){
         YShift = VSTART;
     }
     FRAMENUMBER = 1;
-    setVoltagesXY(XShift, YShift);
+
+    if (MODE == ACTUATOR) {
+        setVoltagesXY(XShift, YShift);
+    }
+    else {
+        setVoltagesXY(VOTHER, VOTHER);
+    }
+
     Sleep(LONG_DELAY);
 
     // Start acquisition
@@ -194,13 +213,20 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS){
 
     if (AXIS == 0) XShift += VRANGE/NFRAMES;
     else YShift += VRANGE/NFRAMES;
-    Err = setVoltagesXY(XShift, YShift);
+    if (MODE == ACTUATOR) {
+        Err = setVoltagesXY(XShift, YShift);
+    }
+    else {
+        setMotorCount(motor, sgn(VRANGE/NFRAMES), int(VRANGE/NFRAMES));
+        float64 timeToCompleteMovement = VRANGE * 1000/(350 * NFRAMES);
+        Sleep(timeToCompleteMovement * 3);
+    }
 
 
     // Process the reference image
-    Err = processReferenceImage(binnedImage, 0);
-    fp = fopen(fname.c_str(), "wb");
-    fwrite(binnedImage, sizeof(binnedImage), NPIX, fp);
+    Err = processReferenceImage(binnedImage);
+    fopen_s(&fp, fname.c_str(), "wb");
+    fwrite(binnedImage, sizeof(*binnedImage), NPIX, fp);
     fclose(fp);
     Current++;
     double *CurrentImage;
@@ -232,29 +258,27 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS){
             sprintf(logString, "Image acquired : %s", fname.c_str());
             loggingfunc(logString);
             XYIND = getImageShift(
-                    binnedImage, 0, 1,
+                    binnedImage,
                     CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, ll);
             shift_x += get<0>(XYIND);
             shift_y += get<1>(XYIND);
-            fp = fopen(fname.c_str(), "wb");
+            fopen_s(&fp, fname.c_str(), "wb");
             fwrite(binnedImage, sizeof(*binnedImage), NPIX, fp);
             fclose(fp);
         }
-
-        // Wait for next image
-//        Image = (uint16_t*)fli->getRawImage();
-//        bin_image(Image, binnedImage, width, height);
-//        fname = string(SAVEPATH) + "\\" + Axis + "_frame_" + string(6 - std::to_string(i+1).length(), '0') + to_string(i+1) + "_Cur.dat";
-//        sprintf(logString, "Image acquired : %s", fname.c_str());
-//        loggingfunc(logString);
-
-        // Apply shifts
 
 //        sprintf(tempLogString, "%lf,%lf,", XShift, YShift);
         if (AXIS == 0) XShift += VRANGE/NFRAMES;
         else YShift += VRANGE/NFRAMES;
         FRAMENUMBER++;
-        Err = setVoltagesXY(XShift, YShift);
+        if (MODE == ACTUATOR) {
+            Err = setVoltagesXY(XShift, YShift);
+        }
+        else {
+           setMotorCount(motor, sgn(VRANGE/NFRAMES), int(VRANGE/NFRAMES));
+            float64 timeToCompleteMovement = VRANGE * 1000/(350 * NFRAMES);
+            Sleep(timeToCompleteMovement * 3);
+        }
 
         // Status bar
         cout << " ";
@@ -275,6 +299,12 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS){
     cout << "  100%\r" << endl;
     cout.flush();
 
+    if (MODE == MOTOR) {
+        setMotorCount(motor, sgn(-1 * VRANGE), int(VRANGE * 0.5));
+        float64 timeToCompleteMovement = VRANGE * 1000 * 0.5 /(350);
+        Sleep(timeToCompleteMovement * 3);
+    }
+
     t1 = chrono::high_resolution_clock::now();
     dt = chrono::duration_cast<chrono::duration<double>>(t1 - t0);
     cout << "Number of frames: " << NFRAMES << ", In seconds: " << dt.count() << endl;
@@ -284,5 +314,10 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS){
     sprintf(logString, "Frame rate: %d", NFRAMES/dt.count());
     loggingfunc(logString);
     Err = closeDAQ();
+    exitMotor(1);
+    disableMotor(1);
+    exitMotor(2);
+    disableMotor(2);
+    closeControllerConnection();
     return 0;
 }

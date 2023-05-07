@@ -6,7 +6,7 @@ double W0=0, WX=0, WY=0, WXY=0, ImageMean=0;
 tuple<double, double, double, double> COEFF;
 tuple<double, double> XYIND;
 double CM[4];
-float XShift, YShift;
+double XShift, YShift;
 double A00;
 double A01;
 double A10;
@@ -19,6 +19,7 @@ double Kd;
 double Ki;
 int Nd;
 int Ni;
+double AA00, AA01, AA10, AA11; // Autoguider control matrix
 // Global variables : serialcom
 
 bool COMSEND = FALSE;

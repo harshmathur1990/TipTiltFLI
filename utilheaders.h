@@ -15,6 +15,10 @@
 #include <tuple>
 #include <Windows.h>
 
+template <typename T> int sgn(T val) {
+    return (T(0) < val) - (val < T(0));
+}
+
 extern std::string loggingFilename;
 extern std::ofstream outfile;
 extern std::string xLogCalibrationFilename;
@@ -45,6 +49,8 @@ int ylog(std::string logString);
 int xvoltagefilelog(std::string logString);
 int yvoltagefilelog(std::string logString);
 int shift_log(std::string logString);
+int ignored_shift_log(std::string logString);
+int autoguider_log(std::string logString);
 int shift_uncorected_log(std::string logString);
 int oplog_write(std::string logString);
 

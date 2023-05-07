@@ -24,26 +24,6 @@
 #include <type_traits>
 #include <memory>
 
-// Constants
-#define PI 3.14159265359
-#define A0 0.54348
-//Cij in order for 512, 256, 128
-#define C00  /* 6.06787473e-05  */ 2.41299051e-04   // 9.53984e-4
-#define C01  /* -1.77943541e-07 */ -1.41662848e-06  // -1.12233e-5
-#define C02  /* -1.77943541e-07 */ -1.41662848e-06  // -1.12233e-5
-#define C03  /* 5.21828565e-10  */ 8.31680126e-09   // 1.32039e-7
-#define C10  /* -1.77943541e-07 */ -1.41662848e-06  // -1.12233e-5
-#define C11  /* 6.96452214e-10  */ 1.11108116e-08   // 1.76745e-7
-#define C12  /* 5.21828565e-10  */ 8.31680126e-09   // 1.32039e-7
-#define C13  /* -2.04238186e-12 */ -6.52298138e-11  // -2.07936e-9
-#define C20  /* -1.77943541e-07 */ -1.41662848e-06  // -1.12233e-05
-#define C21  /* 5.21828565e-10  */ 8.31680126e-09   // 1.32039e-7
-#define C22  /* 6.96452214e-10  */ 1.11108116e-08   // 1.76745e-7
-#define C23  /* -2.04238186e-12 */ -6.52298138e-11  // -2.07936e-9
-#define C30  /* 5.21828565e-10  */ 8.31680126e-09   // 1.32039e-7
-#define C31  /* -2.04238186e-12 */ -6.52298138e-11  // -2.07936e-9
-#define C32  /* -2.04238186e-12 */ -6.52298138e-11  // -2.07936e-9
-#define C33  /* 7.99366676e-15  */ 5.11606383e-13   // 3.27458e-11
 using namespace std;
 
 // Functions
@@ -52,15 +32,15 @@ int getHammingWindow();
 int getIntelFFTPlans();
 int getFFTWPlans();
 
-inline tuple<double,double> getSubPixelShift(double *s, int ind);
-inline tuple<double,double,double,double> getGradientSurfaceFit(double *s);
+inline tuple<double,double> getSubPixelShift(double* const s, int ind);
+inline tuple<double,double,double,double> getGradientSurfaceFit(double* const s);
 inline tuple<double, double> getImageShift(
-        uint16_t *Image, int this_indice, int fpsCamera,
+        uint16_t* const Image,
         double *CurrentImage, fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, uint64_t curr_count);
-inline void bin_separately(uint16_t* image, uint16_t* binned_image);
-void ComputeForward(double* image, fftw_complex* imageFT);
-void ComputeBackward(fftw_complex* imageFT, double* image);
+inline void bin_separately(uint16_t* const image, uint16_t* const binned_image);
+void ComputeForward(double* const image, fftw_complex* const imageFT);
+void ComputeBackward(fftw_complex* const imageFT, double* const image);
 int initializeFFT();
 
 double *HammingWindow;
@@ -79,12 +59,12 @@ int getHammingWindow() {
         Hamm1d[i] = A0 + (A0-1)*cos(2*PI*i/(NX-1));
     }
     // Flatten it from +16 to -16 pixels
-    for (int i=16; i<NX-16; i++){
-        Hamm1d[i] = Hamm1d[15];
+    for (int i=HAMMINGWINDOW_CUT; i < NX - HAMMINGWINDOW_CUT; i++){
+        Hamm1d[i] = Hamm1d[HAMMINGWINDOW_CUT - 1];
     }
     // Normalize the whole window
     double maxHamm = 1.0/ *max_element(Hamm1d, Hamm1d+NX);
-    for (int i=16; i<NX-16; i++){
+    for (int i=HAMMINGWINDOW_CUT; i < NX - HAMMINGWINDOW_CUT; i++){
         Hamm1d[i] *= maxHamm;
     }
     // Convert to 2D mask
@@ -201,7 +181,7 @@ int getFFTWPlans() {
     fftw_complex *invIN;
     invIN = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * NPIXFT);
     double *invOUT;
-    invOUT = new double[NPIXFT];
+    invOUT = new double[NX * NY];
     PlanInverse = fftw_plan_dft_c2r_2d(NX, NY, invIN, invOUT, FFTW_MEASURE);
     return 0;
 }
@@ -213,7 +193,7 @@ int initializeFFT() {
     return getFFTWPlans();
 }
 
-inline tuple<double,double,double,double> getGradientSurfaceFit(double *s) {
+inline tuple<double,double,double,double> getGradientSurfaceFit(double* const s) {
     double Sz=0, Szx=0, Szy=0, Szxy=0;
     tuple<double,double,double,double> COEFF;
     int i=0, XIND=0, YIND=0;
@@ -236,22 +216,21 @@ inline int getLinearArrayIndice(int i, int j) {
     return j * NX + i;
 }
 
-inline tuple<double,double> getSubPixelShift(double *s, int ind) {
+inline tuple<double,double> getSubPixelShift(double* const s, int ind) {
     std::tuple<double, double> XYIND;
-    int XIND = ind%NX, YIND = ind/NX;
+    unsigned int XIND = ind%NX, YIND = ind/NX;
     double nn = 0, nz = 0, np = 0, zn = 0, zz = 0, zp = 0, pn = 0, pz = 0, pp = 0;
     double a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0;
-    int i, j, nei_x, nei_y;
     double coeff[9];
     int k = 0;
-    for (j=-1;j<2;j++) {
-        for (i=-1;i<2;i++) {
-            nei_y = YIND + j;
-            nei_x = XIND + i;
-            if (nei_x < 0) nei_x += NX;
-            else if (nei_x >= NX) nei_x -= NX;
-            if (nei_y < 0) nei_y += NY;
-            else if (nei_y >= NY) nei_y -= NY;
+    for (int j=-1;j<2;j++) {
+        for (int i=-1;i<2;i++) {
+            int nei_y = (signed)YIND + (signed)j;
+            int nei_x = (signed)XIND + (signed)i;
+            if (nei_x < 0) nei_x += (signed)NX;
+            else if (nei_x >= NX) nei_x -= (signed)NX;
+            if (nei_y < 0) nei_y += (signed)NY;
+            else if (nei_y >= NY) nei_y -= (signed)NY;
             coeff[k] = s[getLinearArrayIndice(nei_x, nei_y)];
             k += 1;
         }
@@ -266,13 +245,12 @@ inline tuple<double,double> getSubPixelShift(double *s, int ind) {
     pz = coeff[7];
     pp = coeff[8];
     double xshf = XIND, yshf = YIND;
-
     // We are doing this because 0, 0 is in the corner,
     // not in the center, one can do fftshift and
     // then subtract center coordinates from this,
     // but doing this way is also same
-    if (XIND>(NX/2) - 1) { xshf = XIND - NX; }
-    if (YIND>(NY/2) -  1) { yshf = YIND - NY; }
+    if (XIND>(NX/2) - 1) { xshf = (signed)XIND - (signed)NX; }
+    if (YIND>(NY/2) -  1) { yshf = (signed)YIND - (signed)NY; }
 
     a2 = 0.5 * (zp - zn);
     a3 = 0.5 * (zp - 2*zz + zn);
@@ -281,10 +259,11 @@ inline tuple<double,double> getSubPixelShift(double *s, int ind) {
     a6 = 0.25 * (pp + nn - pn - np);
     get<0>(XYIND) = xshf + (a4*a6-2*a2*a5)/(4*a3*a5-pow(a6,2));
     get<1>(XYIND) = yshf + (a2*a6-2*a3*a4)/(4*a3*a5-pow(a6,2));
+
     return XYIND;
 }
 
-inline int processReferenceImage(uint16_t *Image, int indice){
+inline int processReferenceImage(uint16_t* const Image){
     int XIND, YIND;
     int i=0;
     double ImageMean=0;
@@ -310,27 +289,32 @@ inline int processReferenceImage(uint16_t *Image, int indice){
     }
 
     ComputeForward(ReferenceImage, ReferenceImageFT);
+//    string fname = string(SAVEPATH) + "//Ref" + ".dat";
+//    FILE *fp;
+//    fopen_s(&fp, fname.c_str(), "wb");
+//    fwrite(ReferenceImage, sizeof(*ReferenceImage), NX * NY, fp);
+//    fclose(fp);
     return 0;
 }
 
 inline tuple<double, double> getImageShift(
-        uint16_t *Image, int this_indice, int fpsCamera, double *CurrentImage,
+        uint16_t* const Image, double *CurrentImage,
         fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, uint64_t curr_count
         ) {
 
     std::tuple<double, double> XYIND;
     std::tuple<double, double, double, double> COEFF;
-    int i=0, XIND, YIND, MAXIND;
+    unsigned MAXIND;
     double ImageMean = 0;
     string fname;
     // Reduction
-    for (i=0; i<NPIX; i++){
-         CurrentImage[i] = Image[i];
+    for (unsigned int i=0; i<NPIX; i++){
+        CurrentImage[i] = Image[i];
         ImageMean += CurrentImage[i];
     }
     ImageMean = NPIX/ImageMean;
-    for (i=0; i<NPIX; i++){
+    for (unsigned int i=0; i<NPIX; i++){
         CurrentImage[i] *= ImageMean;
     }
     // Gradient removal and windowing
@@ -340,23 +324,21 @@ inline tuple<double, double> getImageShift(
     double WX = get<1>(COEFF);
     double WY = get<2>(COEFF);
     double WXY = get<3>(COEFF);
-    for (i=0; i<NPIX; i++){
-        XIND = i%NX;
-        YIND = i/NX;
+    for (unsigned int i=0; i<NPIX; i++){
+        unsigned int XIND = i%NX;
+        unsigned int YIND = i/NX;
         CurrentImage[i] -= W0 + WX*XIND + WY*YIND + WXY*XIND*YIND;
         CurrentImage[i] *= HammingWindow[i];
     }
 
-//    fname = string(SAVEPATH) + "//Curr_" +  to_string(curr_count) + ".dat";
-
-//    FILE *fp;
-//    fopen_s(&fp, fname.c_str(), "wb");
-//    fwrite(CurrentImage, sizeof(CurrentImage), NX * NY, fp);
-//    fclose(fp);
 
     ComputeForward(CurrentImage, CurrentImageFT);
+//    FILE *fp;
+//    fopen_s(&fp, fname.c_str(), "wb");
+//    fwrite(CurrentImageFT, sizeof(*CurrentImageFT), NPIXFT, fp);
+//    fclose(fp);
 
-    for (i=0; i<NPIXFT; i++){
+    for (unsigned int i=0; i<NPIXFT; i++){
         CorrelatedImageFT[i][0] = CurrentImageFT[i][0]*ReferenceImageFT[i][0] + CurrentImageFT[i][1]*ReferenceImageFT[i][1];
         CorrelatedImageFT[i][1] = CurrentImageFT[i][1]*ReferenceImageFT[i][0] - CurrentImageFT[i][0]*ReferenceImageFT[i][1];
     }
@@ -365,6 +347,14 @@ inline tuple<double, double> getImageShift(
     MAXIND = distance(CorrelatedImage, max_element(CorrelatedImage, CorrelatedImage+NPIX));
 
     XYIND = getSubPixelShift(CorrelatedImage, MAXIND); // Sub-pixel interpolation
+
+//    FILE *fp;
+//    if ((abs(get<0>(XYIND)) > 20 ) || (abs(get<1>(XYIND)) > 20 ) ) {
+//        fname = string(SAVEPATH) + "//Curr_" +  to_string(curr_count) + ".dat";
+//        fopen_s(&fp, fname.c_str(), "wb");
+//        fwrite(CurrentImage, sizeof(*CurrentImage), NX * NY, fp);
+//        fclose(fp);
+//    }
 
     return XYIND;
 }
@@ -434,7 +424,7 @@ inline void bin_separately(uint16_t* const image, uint16_t* const binnedImage)
 
 }
 
-void ComputeForward(double* image, fftw_complex* imageFT) {
+void ComputeForward(double* const image, fftw_complex* const imageFT) {
     if (MODE == INTEL_FFT) {
         DftiComputeForward(descHandle, image, imageFT);
         return;
@@ -442,7 +432,7 @@ void ComputeForward(double* image, fftw_complex* imageFT) {
     fftw_execute_dft_r2c( PlanForward, image, imageFT);
 }
 
-void ComputeBackward(fftw_complex* imageFT, double* image){
+void ComputeBackward(fftw_complex* const imageFT, double* const image){
     if (MODE == INTEL_FFT) {
         DftiComputeBackward(descHandle, imageFT, image);
         return;

@@ -20,6 +20,8 @@ std::string currentDirectoryYVoltageOnlyFilename;
 std::ofstream currentDirectoryOutfileYVoltageOnlyFilename;
 std::ofstream shiftUncorrected;
 std::ofstream shift;
+std::ofstream ignoredShift;
+std::ofstream autoguider;
 std::ofstream opLog;
 
 int log(std::string logString) {
@@ -62,6 +64,16 @@ int shift_log(std::string logString) {
     return 0;
 }
 
+int ignored_shift_log(std::string logString) {
+    ignoredShift << logString << std::endl;
+    return 0;
+}
+
+int autoguider_log(std::string logString) {
+    autoguider << logString << std::endl;
+    return 0;
+}
+
 int shift_uncorected_log(std::string logString) {
     shiftUncorrected << logString << std::endl;
     return 0;
@@ -95,7 +107,9 @@ int setupLogging(int mode){
     else if (mode == 2) {
         shiftUncorrected.open(std::string(std::string(SAVEPATH) + "\\Shifts_Uncorrected.csv").c_str());
         shift.open(std::string(std::string(SAVEPATH) + "\\Shifts.csv").c_str());
+        autoguider.open(std::string(std::string(SAVEPATH) + "\\Autoguider.csv").c_str());
         opLog.open(std::string(std::string(SAVEPATH) + "\\oplog.txt").c_str());
+        ignoredShift.open(std::string(std::string(SAVEPATH) + "\\IgnoredShift.csv").c_str());
     }
     return 0;
 }

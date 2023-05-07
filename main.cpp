@@ -4,6 +4,7 @@
 #include "NIDAQmx.h"
 #include <mutex>
 #include "utilheaders.h"
+#include "motorcontrols.h"
 
 using namespace std;
 
@@ -12,32 +13,37 @@ double A00, A01, A10, A11;
 double Vxoff, Vyoff, SlewRate;
 double Kp, Kd, Ki;
 int Ni, Nd;
+double AA00, AA01, AA10, AA11; // Autoguider control matrix
 extern FliSdk* fli;
 extern int Err;
 
 char logString[100000];
 int (*loggingfunc) (std::string) = NULL;
-bool ready = false;
-mutex g_mutex;
-deque<float> volQueue;
+bool tipTiltReady = false, autoGuiderReady = false;
+mutex tipTiltMutex, autoGuiderMutex;
+deque<double> tipTiltQueue;
+deque<int> autoGuiderQueue;
+std::condition_variable tipTiltConditionalVariable, autoGuiderConditionalVariable;
 
-inline void closedLoopCallBack(uint16_t* Image, uint64_t nbImagesReceived, double* binImgTime, double* imgWriteTime,
+inline void closedLoopCallBack(uint16_t* const Image, uint64_t nbImagesReceived, double* binImgTime, double* imgWriteTime,
                         double* imgShiftTime, double* calcCorrectionTime, double* applyCorrectionTime,
                         uint64_t* curr_count, uint64_t* ignore_count, uint64_t NREFRESH, uint64_t* NumRefImage,
                         uint64_t* integralCounter, uint64_t* derivativeCounter, bool* breakLoop, uint64_t* counter,
-                        uint64_t* status_count, float* XShift, float* YShift, uint64_t* error_no,
+                        uint64_t* status_count, double* XShift, double* YShift, uint64_t* error_no,
                         deque<double> &integralErrorX, deque<double> &integralErrorY,
                         deque<double> &derivativeErrorX, deque<double> &derivativeErrorY,
                         double *CurrentImage, fftw_complex *CurrentImageFT,
                         fftw_complex *CorrelatedImageFT, double *CorrelatedImage,
-                        int fpsCamera, uint16_t* binnedImage, int ACQMODE,
-                        uint16_t* rotatingCounter);
+                        int fpsCamera, uint16_t* const binnedImage, int ACQMODE,
+                        uint16_t* rotatingCounter, double *sumX, double *sumY,
+                        int AUTOGUIDERMODE);
 inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErrorX, deque<double> &integralErrorY,
                   deque<double> &derivativeErrorX, deque<double> &derivativeErrorY, uint64_t *integralCounter,
                   uint64_t *derivativeCounter, double *correctionX, double *correctionY,
                   uint64_t curr_count, uint64_t nbImagesReceived
 );
 [[noreturn]] DWORD WINAPI closedLoopVoltageThread(LPVOID lparam);
+[[noreturn]] DWORD WINAPI closedLoopAutoGuiderThread(LPVOID lparam);
 
 MKL_LONG counterImager=0;
 double totalBinTime=0;
@@ -53,7 +59,7 @@ int main () {
     COMMAND[15] = 10; // LF
 
     // Other variables
-	int  ACQMODE = 1, NREFREFRESH=100;
+	int  ACQMODE = 1, NREFREFRESH=100, AUTOGUIDER=0;
 
     sprintf(logString, "Initializing devices and acquiring one-time data");
     log(logString);
@@ -85,17 +91,21 @@ int main () {
     sendCommand(YPort, "sr,0," + to_string(SlewRate));
     cout << "Initializing DAQ..." << endl;
     Err = initDAQ();
-//    XShift = Vxoff;
-//    YShift = Vyoff;
-//    cout << "Actuator going to offset point..." << endl;
-//    Err = setVoltagesXY(XShift, YShift);
 //    Sleep(LONG_DELAY);
     cout << "Enter acquisition mode, 1: with corrections, 2: only shifts-no corrections... ";
     cin >> ACQMODE;
     cout.flush();
-    // Acquisition and computation
+    cout << "Enter Autoguider mode (0: OFF, 1: ON)...";
+    cin >> AUTOGUIDER;
     cout.flush();
 
+    if (AUTOGUIDER) {
+        CreateControllerConnection(1);
+        enableMotor(1);
+        enableMotor(2);
+        setMotorFrequency(1, 350);
+        setMotorFrequency(2, 350);
+    }
     cout << "Number of frames to refresh reference : ";
     cin >> NREFREFRESH;
     cout.flush();
@@ -104,24 +114,65 @@ int main () {
     log(logString);
     cout.flush();
     string slopeString;
-    unique_lock<mutex> ul(g_mutex);
-    volQueue.push_back(Vxoff);
-    volQueue.push_back(Vyoff);
-    ready = true;
-    ul.unlock();
-    HANDLE myHandle;
-    DWORD myThreadID;
-    myHandle = CreateThread(0, 0, closedLoopVoltageThread, NULL, 0, &myThreadID);
-    RawImageReceivedObserver obs(closedLoopCallBack, NREFREFRESH, Vxoff, Vyoff, ACQMODE);
-    Sleep(1.5);
+    setVoltagesXY(Vxoff, Vyoff);
+    HANDLE tipTiltHandle, autoguiderHandle;
+    DWORD tipTiltThreadID, autoguiderThreadID;
+    tipTiltHandle = CreateThread(0, 0, closedLoopVoltageThread, NULL, 0, &tipTiltThreadID);
+    autoguiderHandle = CreateThread(0, 0, closedLoopAutoGuiderThread, NULL, 0, &autoguiderThreadID);
+    RawImageReceivedObserver obs(closedLoopCallBack, NREFREFRESH, Vxoff, Vyoff, ACQMODE, AUTOGUIDER);
     startCamera();
     while(slopeString[0] != 'q') {
         cout << "Enter q to quit program" << endl;
         getline(std::cin, slopeString);
+        if ((slopeString[0] == 't') || (slopeString[0] == 'T')) {
+            cout << "Enter ACQMODE" << endl;
+            cin>>ACQMODE;
+            if ((ACQMODE == 0) || (ACQMODE == 1)) {
+                obs.setACQMODE(ACQMODE);
+            }
+        }
+        if ((slopeString[0] == 'p') || (slopeString[0] == 'P')) {
+            cout << "Enter Kp" << endl;
+            cin>>Kp;
+            cout << "Enter Ki" << endl;
+            cin>>Ki;
+            cout << "Enter Kd" << endl;
+            cin>>Kd;
+        }
+        if ((slopeString[0] == 'a') || (slopeString[0] == 'A')) {
+            cout << "Enter Autoguider mode: "<<endl;
+            int amode;
+            cin>>amode;
+            if ((amode == 1) && (AUTOGUIDER == 0)) {
+                CreateControllerConnection(1);
+                enableMotor(1);
+                enableMotor(2);
+                setMotorFrequency(1, 350);
+                setMotorFrequency(2, 350);
+                obs.setAUTOGUIDERMODE(amode);
+                AUTOGUIDER = amode;
+            }
+            else if ((amode == 0) && (AUTOGUIDER == 1)) {
+                obs.setAUTOGUIDERMODE(amode);
+                exitMotor(1);
+                disableMotor(1);
+                exitMotor(2);
+                disableMotor(2);
+                closeControllerConnection();
+                AUTOGUIDER = amode;
+            }
+        }
     }
     stopCamera();
-    CloseHandle(myHandle);
-//    CloseHandle(myHandle);
+    CloseHandle(tipTiltHandle);
+    CloseHandle(autoguiderHandle);
+    if (AUTOGUIDER) {
+        exitMotor(1);
+        disableMotor(1);
+        exitMotor(2);
+        disableMotor(2);
+        closeControllerConnection();
+    }
     // Clearing data
     XShift = -20;
     YShift = -20;
@@ -212,10 +263,6 @@ inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErro
     *correctionX = A00*correctionShiftX + A01*correctionShiftY;
     *correctionY = A10*correctionShiftX + A11*correctionShiftY;
 
-    if ((abs(toCorrectXTemp) >= 8) || (abs(toCorrectYTemp) >= 4)) {
-        *correctionX = 0;
-        *correctionY = 0;
-    }
     sprintf(logString, "%ld, %ld, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf", curr_count, nbImagesReceived, toCorrectXTemp, toCorrectYTemp, integralErrorVoltageX, integralErrorVoltageY, derivativeErrorVoltageX, derivativeErrorVoltageY, correctionShiftX, correctionShiftY, *correctionX, *correctionY);
     shift_uncorected_log(logString);
     return 0;
@@ -223,28 +270,27 @@ inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErro
 
 
 inline void closedLoopCallBack(
-        uint16_t* Image, uint64_t nbImagesReceived, double* binImgTime, double* imgWriteTime,
+        uint16_t* const Image, uint64_t nbImagesReceived, double* binImgTime, double* imgWriteTime,
         double* imgShiftTime, double* calcCorrectionTime, double* applyCorrectionTime,
         uint64_t* curr_count, uint64_t* ignore_count,
         uint64_t NREFRESH, uint64_t* NumRefImage,
         uint64_t* integralCounter, uint64_t* derivativeCounter, bool* breakLoop, uint64_t* counter,
-        uint64_t* status_count, float* XShift, float* YShift, uint64_t* error_no,
+        uint64_t* status_count, double* XShift, double* YShift, uint64_t* error_no,
         deque<double> &integralErrorX, deque<double> &integralErrorY,
         deque<double> &derivativeErrorX, deque<double> &derivativeErrorY,
         double *CurrentImage, fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, int fpsCamera,
-        uint16_t* binnedImage, int ACQMODE, uint16_t* rotatingCounter
+        uint16_t* const binnedImage, int ACQMODE, uint16_t* rotatingCounter,
+        double *sumX, double *sumY, int AUTOGUIDERMODE
         )
 {
-    chrono::high_resolution_clock::time_point t0, t1;
-    chrono::duration<double> dt;
 
     if (*breakLoop == true) {
         return;
     }
-    if (*rotatingCounter == fpsCamera) {
-        *rotatingCounter = 0;
-    }
+//    if (*rotatingCounter == fpsCamera) {
+//        *rotatingCounter = 0;
+//    }
     tuple<double, double> XYIND;
     int status, statusApply=0;
     double XTemp, YTemp;
@@ -260,42 +306,80 @@ inline void closedLoopCallBack(
     }
     if (*counter > NREFRESH) {
         *NumRefImage += 1;
-        processReferenceImage(binnedImage, this_indice);
+        processReferenceImage(binnedImage);
         *counter = 0;
     }
     else {
         XYIND = getImageShift(
-                binnedImage, this_indice, fpsCamera,
+                binnedImage,
                 CurrentImage, CurrentImageFT, CorrelatedImageFT,
                 CorrelatedImage, *curr_count);
         XTemp = get<0>(XYIND);
         YTemp = get<1>(XYIND);
+
+//        if ( (abs(XTemp) > 4) || (abs(YTemp) > 4) ) {
+//            *counter += 1;
+//            *curr_count += 1;
+//            *rotatingCounter += 1;
+//            sprintf(logString, "%ld, %lf, %lf", *curr_count, -XTemp, -YTemp);
+//            ignored_shift_log(logString);
+//            return;
+//        }
+        *sumX -= XTemp;
+        *sumY -= YTemp;
+
         getCorrection(XTemp, YTemp, integralErrorX, integralErrorY,
                       derivativeErrorX, derivativeErrorY, integralCounter, derivativeCounter,
                       &correctionX, &correctionY, *curr_count, nbImagesReceived
         );
 
+        if (*rotatingCounter == 10 * fpsCamera) {
+            if (AUTOGUIDERMODE == 1) {
+                unique_lock<mutex> aul(autoGuiderMutex);
+                int autoCorX = int(AA00 * *sumX + AA01 * *sumY);
+                int autoCorY = int(AA10 * *sumX + AA11 * *sumY);
+                autoGuiderQueue.push_back(autoCorX);
+                autoGuiderQueue.push_back(autoCorY);
+                autoGuiderReady = true;
+                aul.unlock();
+                autoGuiderConditionalVariable.notify_one();
+                aul.lock();
+                autoGuiderConditionalVariable.wait(aul, [](){return !autoGuiderReady;});
+                aul.unlock();
+                sprintf(logString, "%lf, %lf, %d, %d", *sumX, *sumY, autoCorX, autoCorY);
+                autoguider_log(logString);
+            }
+            *rotatingCounter = 0;
+        }
         if (ACQMODE == 1) {
             if ((*XShift + correctionX < -20) || (*XShift + correctionX > 130)) {
                 *error_no = 1;
-                cout << "error_no is "<< *error_no<<endl;
+//                cout << "error_no is "<< *error_no<<endl;
+                *breakLoop = true;
             }
             else if ((*YShift + correctionY < -20) || (*YShift + correctionY > 130)) {
                 *error_no = 2;
-                cout << "error_no is "<< *error_no<<endl;
+//                cout << "error_no is "<< *error_no<<endl;
+                *breakLoop = true;
             }
             else {
                 *error_no = 0;
             }
             if (*error_no == 0) {
+                int pending=0;
                 *XShift += correctionX;
                 *YShift += correctionY;
-                unique_lock<mutex> ul(g_mutex);
-                volQueue.push_back(*XShift);
-                volQueue.push_back(*YShift);
-                ready = true;
+                unique_lock<mutex> ul(tipTiltMutex);
+                pending = tipTiltQueue.size() / 2;
+                tipTiltQueue.push_back(*XShift);
+                tipTiltQueue.push_back(*YShift);
+                tipTiltReady = true;
                 ul.unlock();
-                sprintf(logString, "%ld, %ld, %lf, %lf, %lf, %lf, %d", *curr_count, nbImagesReceived, -XTemp, -YTemp, *XShift, *YShift, statusApply);
+                tipTiltConditionalVariable.notify_one();
+                ul.lock();
+                tipTiltConditionalVariable.wait(ul, []() { return !tipTiltReady; });
+                ul.unlock();
+                sprintf(logString, "%ld, %ld, %lf, %lf, %lf, %lf, %d", *curr_count, nbImagesReceived, -XTemp, -YTemp, *XShift, *YShift, pending);
                 shift_log(logString);
             }
         }
@@ -306,22 +390,34 @@ inline void closedLoopCallBack(
 }
 
 DWORD WINAPI closedLoopVoltageThread(LPVOID lparam) {
-    float XXShift, YYShift;
-    bool voltageSet = false;
+    double XXShift, YYShift;
     while (true) {
-        unique_lock<mutex> ul(g_mutex);
-        if (ready) {
-            XXShift = volQueue.front();
-            volQueue.pop_front();
-            YYShift = volQueue.front();
-            volQueue.pop_front();
-            ready = false;
-            voltageSet = true;
-        }
+        unique_lock<mutex> ul(tipTiltMutex);
+        tipTiltConditionalVariable.wait(ul, []() { return tipTiltReady; });
+        XXShift = tipTiltQueue.front();
+        tipTiltQueue.pop_front();
+        YYShift = tipTiltQueue.front();
+        tipTiltQueue.pop_front();
+        tipTiltReady = false;
         ul.unlock();
-        if (voltageSet) {
-            voltageSet = false;
-            setVoltagesXY(XXShift, YYShift);
-        }
+        tipTiltConditionalVariable.notify_one();
+        setVoltagesXY(XXShift, YYShift);
+    }
+}
+
+DWORD WINAPI closedLoopAutoGuiderThread(LPVOID lparam) {
+    int XXShift, YYShift;
+    while (true) {
+        unique_lock<mutex> aul(autoGuiderMutex);
+        autoGuiderConditionalVariable.wait(aul, [](){return autoGuiderReady;});
+        XXShift = autoGuiderQueue.front();
+        autoGuiderQueue.pop_front();
+        YYShift = autoGuiderQueue.front();
+        autoGuiderQueue.pop_front();
+        autoGuiderReady = false;
+        aul.unlock();
+        autoGuiderConditionalVariable.notify_one();
+        setMotorCount(2, sgn(XXShift), XXShift);
+        setMotorCount(1, sgn(YYShift), YYShift);
     }
 }
