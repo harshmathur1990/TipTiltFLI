@@ -1,11 +1,14 @@
 cmake_minimum_required(VERSION 3.14)
 project(TipTiltAO)
 
+set(CMAKE_PREFIX_PATH C:/PROGRA~1/opencv/build)
 set(CMAKE_BUILD_TYPE RELEASE)
 set(CMAKE_CXX_STANDARD 23)
 
 remove_definitions(-DUNICODE -D_UNICODE)
 
+find_package( OpenCV REQUIRED )
+include_directories( ${OpenCV_INCLUDE_DIRS} )
 include_directories($ENV{FLISDK_DIR}/include)
 
 if(ARM_BUILD)
@@ -44,14 +47,14 @@ set(INTEL_FFTWLINK C:/PROGRA~2/Intel/oneAPI/mkl/2023.1.0/lib/intel64)
 set(INTEL_FFTW_INCLUDE C:/PROGRA~2/Intel/oneAPI/mkl/2023.1.0/include)
 set(INTEL_FFTWLINKLIB ${INTEL_FFTWLINK}/mkl_intel_lp64.lib ${INTEL_FFTWLINK}/mkl_core.lib ${INTEL_FFTWLINK}/mkl_sequential.lib)
 
-set(SOURCES main.cpp controls.h firstlight.h imageprocess.h utilheaders.h utils.cpp mkl_data_types.h imageheaders.h serialconnection.h serialconnection.cpp motorcontrols.h motorcontrols.cpp)
+set(SOURCES main.cpp controls.h firstlight.h imageprocess.h utilheaders.h utils.cpp mkl_data_types.h imageheaders.h serialconnection.h serialconnection.cpp motorcontrols.h motorcontrols.cpp pid.h pid.cpp)
 add_executable(TipTiltAO ${SOURCES})
-target_include_directories(TipTiltAO PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INTEL_FFTW_INCLUDE} ${FFTW})
-target_link_libraries(TipTiltAO $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INTEL_FFTWLINKLIB} ${FFTWLINK})
+target_include_directories(TipTiltAO PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INTEL_FFTW_INCLUDE} ${FFTW} ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(TipTiltAO $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INTEL_FFTWLINKLIB} ${FFTWLINK} ${OpenCV_LIBS})
 
 add_executable(CalibrateXY calibration.cpp utilheaders.h utils.cpp imageheaders.h serialconnection.h serialconnection.cpp motorcontrols.h motorcontrols.cpp)
-target_include_directories(CalibrateXY PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INTEL_FFTW_INCLUDE} ${FFTW})
-target_link_libraries(CalibrateXY $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INTEL_FFTWLINKLIB} ${FFTWLINK})
+target_include_directories(CalibrateXY PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} ${INTEL_FFTW_INCLUDE} ${FFTW} ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(CalibrateXY $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib ${INTEL_FFTWLINKLIB} ${FFTWLINK} ${OpenCV_LIBS})
 
 add_executable(VoltageShiftMatrix make_calibration_matrix.cpp)
 
@@ -62,9 +65,9 @@ add_executable(VoltageShiftMatrix make_calibration_matrix.cpp)
 add_executable(VoltageTest voltage_test.cpp utilheaders.h utils.cpp)
 target_include_directories(VoltageTest PRIVATE ${INCLUDE_DIR} ${INCLUDE_WINDIR} ${INCLUDE_lIB_DIR} )
 target_link_libraries(VoltageTest $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib)
-#
+
 add_executable(Test2  test_2.cpp)
-#
+
 add_executable(MKLTest mkltest.cpp)
 target_include_directories(MKLTest PRIVATE ${INTEL_FFTW_INCLUDE} ${FFTW})
 target_link_libraries(MKLTest ${INTEL_FFTWLINKLIB} ${FFTWLINK})

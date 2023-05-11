@@ -33,7 +33,7 @@ public:
                                  fftw_complex *CorrelatedImageFT, double *CorrelatedImage,
                                  int fpsCamera, uint16_t* const binnedImage, int ACQMODE,
                                  uint16_t* rotatingCounter, double *sumX, double *sumY,
-                                 int AUTOGUIDERMODE
+                                 int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY
             ), uint64_t NREFERESH, double XShift, double YShift, int ACQMODE, int AUTOGUIDERMODE):
             workFunction(workFunction),
             NREFRESH(NREFERESH),
@@ -78,16 +78,16 @@ public:
         if (this->_nbImagesReceived == 0) {
             t0 = chrono::high_resolution_clock::now();
         }
-        if ( (printStats == true) & ( (!(this->_nbImagesReceived & ((1 << 12) - 1) )) || breakLoop == true)) {
+        if (printStats & ((!(this->_nbImagesReceived & ((1 << 12) - 1) )) || breakLoop)) {
             t1 = chrono::high_resolution_clock::now();
             dt = chrono::duration_cast<chrono::duration<double>>(t1 - t0);
             fps = (_nbImagesReceived) / dt.count();
-            cout << "FPS: "<< fps << " curr_count :" << curr_count << "\r";
-            cout.flush();
             if (breakLoop == true) {
                 printStats = false;
                 cout << "error_no: "<< error_no << endl;
             }
+            cout << "FPS: "<< fps << " XShift: "<< XShift<< " YShift: "<< YShift<< " sumX: "<< sumX<< " sumY: "<<sumY<< " _nbImagesReceived :" << _nbImagesReceived << "\r";
+            cout.flush();
         }
         this->imagePointer = (uint16_t *) image;
         this->_nbImagesReceived = this->_nbImagesReceived + 1;
@@ -99,7 +99,8 @@ public:
             &counter, &status_count, &XShift, &YShift, &error_no,
             integralErrorX, integralErrorY, derivativeErrorX, derivativeErrorY,
             CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, fpsCamera,
-            binnedImage, ACQMODE, &rotatingCounter, &sumX, &sumY, AUTOGUIDERMODE
+            binnedImage, ACQMODE, &rotatingCounter, &sumX, &sumY, AUTOGUIDERMODE, &sumVoltageX,
+            &sumVoltageY
         );
 
     }
@@ -139,12 +140,12 @@ private:
         deque<double> &derivativeErrorY, double *CurrentImage, fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, int fpsCamera,
         uint16_t* binnedImage, int ACQMODE, uint16_t* rotatingCounter, double *sumX, double *sumY,
-        int AUTOGUIDERMODE
+        int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY
     ) = NULL;
     chrono::high_resolution_clock::time_point t0, t1;
     chrono::duration<double> dt;
     double fps;
-    double binImgTime, imgWriteTime, imgShiftTime, calcCorrectionTime, applyCorrectionTime, sumX, sumY;
+    double binImgTime, imgWriteTime, imgShiftTime, calcCorrectionTime, applyCorrectionTime, sumX, sumY, sumVoltageX, sumVoltageY;
     uint64_t integralCounter, derivativeCounter, NREFRESH, curr_count, ignore_count, NumRefImage, counter, status_count, error_no;
     double XShift, YShift;
     bool breakLoop, printStats;

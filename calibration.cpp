@@ -15,6 +15,7 @@ double A00;
 double A01;
 double A10;
 double A11;
+double ClM00, ClM01, ClM10, ClM11;
 double Vxoff;
 double Vyoff;
 double SlewRate;
@@ -24,6 +25,18 @@ double Ki;
 int Nd;
 int Ni;
 double AA00, AA01, AA10, AA11; // Autoguider control matrix
+double tau;
+
+/* Output limits */
+double limMin;
+double limMax;
+
+/* Integrator limits */
+double limMinInt;
+double limMaxInt;
+
+/* Sample time (in seconds) */
+double sampleTime;
 int (*loggingfunc) (std::string) = NULL;
 int (*shiftfunc) (std::string) = NULL;
 // Global variables : serialcom
@@ -35,6 +48,10 @@ auto TNow = chrono::system_clock::now();
 extern FliSdk* fli;
 char logString[100000];
 extern int Err;
+mutex displayMutex;
+deque<double> displayQueue;
+std::condition_variable displayConditionalVariable;
+bool displayReady;
 
 int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE);
 

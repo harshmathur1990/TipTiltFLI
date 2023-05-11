@@ -23,6 +23,7 @@
 #include "imageheaders.h"
 #include <type_traits>
 #include <memory>
+#include <opencv2/opencv.hpp>
 
 using namespace std;
 
@@ -49,6 +50,11 @@ fftw_complex* ReferenceImageFT;
 DFTI_DESCRIPTOR_HANDLE descHandle;
 fftw_plan PlanForward;
 fftw_plan PlanInverse;
+
+extern bool displayReady;
+extern mutex displayMutex;
+extern deque<double> displayQueue;
+extern std::condition_variable displayConditionalVariable;
 
 int getHammingWindow() {
     HammingWindow = (double*) malloc(sizeof(double)*NPIX);
@@ -349,11 +355,25 @@ inline tuple<double, double> getImageShift(
     XYIND = getSubPixelShift(CorrelatedImage, MAXIND); // Sub-pixel interpolation
 
 //    FILE *fp;
-//    if ((abs(get<0>(XYIND)) > 20 ) || (abs(get<1>(XYIND)) > 20 ) ) {
+//    if ((abs(get<0>(XYIND)) > 10 ) || (abs(get<1>(XYIND)) > 10 ) ) {
 //        fname = string(SAVEPATH) + "//Curr_" +  to_string(curr_count) + ".dat";
 //        fopen_s(&fp, fname.c_str(), "wb");
 //        fwrite(CurrentImage, sizeof(*CurrentImage), NX * NY, fp);
 //        fclose(fp);
+//    }
+
+
+//    if (curr_count & ((1 << 8) - 1) ) {
+//        unique_lock<mutex> dul(displayMutex);
+//        for (unsigned ind=0;ind < NX * NY; ind++) {
+//            displayQueue.push_back(CurrentImage[ind]);
+//        }
+//        displayReady = true;
+//        dul.unlock();
+//        displayConditionalVariable.notify_one();
+//        dul.lock();
+//        displayConditionalVariable.wait(dul, []() { return !displayReady; });
+//        dul.unlock();
 //    }
 
     return XYIND;

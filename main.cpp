@@ -5,25 +5,44 @@
 #include <mutex>
 #include "utilheaders.h"
 #include "motorcontrols.h"
+#include "pid.h"
 
 using namespace std;
 
 extern HANDLE XPort, YPort;
 double A00, A01, A10, A11;
+double ClM00, ClM01, ClM10, ClM11;
 double Vxoff, Vyoff, SlewRate;
 double Kp, Kd, Ki;
 int Ni, Nd;
 double AA00, AA01, AA10, AA11; // Autoguider control matrix
 extern FliSdk* fli;
 extern int Err;
+double tau;
 
-char logString[100000];
+/* Output limits */
+double limMin;
+double limMax;
+
+/* Integrator limits */
+double limMinInt;
+double limMaxInt;
+
+/* Sample time (in seconds) */
+double sampleTime;
+PIDController pidX;
+PIDController pidY;
+char logString[100000],  logString_2[100000], logString_3[100000];
 int (*loggingfunc) (std::string) = NULL;
-bool tipTiltReady = false, autoGuiderReady = false;
+bool tipTiltReady = false, autoGuiderReady = false, displayReady = false;
 mutex tipTiltMutex, autoGuiderMutex;
 deque<double> tipTiltQueue;
+deque<uint64_t> tipTiltQueue_2;
 deque<int> autoGuiderQueue;
 std::condition_variable tipTiltConditionalVariable, autoGuiderConditionalVariable;
+mutex displayMutex;
+deque<double> displayQueue;
+std::condition_variable displayConditionalVariable;
 
 inline void closedLoopCallBack(uint16_t* const Image, uint64_t nbImagesReceived, double* binImgTime, double* imgWriteTime,
                         double* imgShiftTime, double* calcCorrectionTime, double* applyCorrectionTime,
@@ -36,7 +55,7 @@ inline void closedLoopCallBack(uint16_t* const Image, uint64_t nbImagesReceived,
                         fftw_complex *CorrelatedImageFT, double *CorrelatedImage,
                         int fpsCamera, uint16_t* const binnedImage, int ACQMODE,
                         uint16_t* rotatingCounter, double *sumX, double *sumY,
-                        int AUTOGUIDERMODE);
+                        int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY);
 inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErrorX, deque<double> &integralErrorY,
                   deque<double> &derivativeErrorX, deque<double> &derivativeErrorY, uint64_t *integralCounter,
                   uint64_t *derivativeCounter, double *correctionX, double *correctionY,
@@ -44,6 +63,7 @@ inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErro
 );
 [[noreturn]] DWORD WINAPI closedLoopVoltageThread(LPVOID lparam);
 [[noreturn]] DWORD WINAPI closedLoopAutoGuiderThread(LPVOID lparam);
+[[noreturn]] DWORD WINAPI displayThread(LPVOID lparam);
 
 MKL_LONG counterImager=0;
 double totalBinTime=0;
@@ -82,6 +102,18 @@ int main () {
     cout << "Loading the calibration matrix... " << endl;
     Err = getCalibrationMatrix();
 
+    pidX = {Kp, Ki, Kd,
+                         tau,
+                         limMin, limMax,
+                         limMinInt, limMaxInt,
+                         sampleTime };
+    pidY = {Kp, Ki, Kd,
+                          tau,
+                          limMin, limMax,
+                          limMinInt, limMaxInt,
+                          sampleTime };
+    PIDController_Init(&pidX);
+    PIDController_Init(&pidY);
     // Go to offset point
     loggingfunc = oplog_write;
     sendCommand(XPort, "set,0,-20.0");
@@ -89,8 +121,15 @@ int main () {
     Sleep(LONG_DELAY);
     sendCommand(XPort, "sr,0," + to_string(SlewRate));
     sendCommand(YPort, "sr,0," + to_string(SlewRate));
+//    sendCommand(XPort, "kp,0,0");
+//    sendCommand(XPort, "ki,0,50");
+//    sendCommand(XPort, "kd,0,0");
+//    sendCommand(YPort, "kp,0,0");
+//    sendCommand(YPort, "ki,0,50");
+//    sendCommand(YPort, "kd,0,0");
     cout << "Initializing DAQ..." << endl;
     Err = initDAQ();
+    setVoltagesXY(Vxoff, Vyoff);
 //    Sleep(LONG_DELAY);
     cout << "Enter acquisition mode, 1: with corrections, 2: only shifts-no corrections... ";
     cin >> ACQMODE;
@@ -114,11 +153,11 @@ int main () {
     log(logString);
     cout.flush();
     string slopeString;
-    setVoltagesXY(Vxoff, Vyoff);
-    HANDLE tipTiltHandle, autoguiderHandle;
-    DWORD tipTiltThreadID, autoguiderThreadID;
+    HANDLE tipTiltHandle, autoguiderHandle, displayHandle;
+    DWORD tipTiltThreadID, autoguiderThreadID, displayThreadID;
     tipTiltHandle = CreateThread(0, 0, closedLoopVoltageThread, NULL, 0, &tipTiltThreadID);
     autoguiderHandle = CreateThread(0, 0, closedLoopAutoGuiderThread, NULL, 0, &autoguiderThreadID);
+//    displayHandle = CreateThread(0, 0, displayThread, NULL, 0, &displayThreadID);
     RawImageReceivedObserver obs(closedLoopCallBack, NREFREFRESH, Vxoff, Vyoff, ACQMODE, AUTOGUIDER);
     startCamera();
     while(slopeString[0] != 'q') {
@@ -166,6 +205,7 @@ int main () {
     stopCamera();
     CloseHandle(tipTiltHandle);
     CloseHandle(autoguiderHandle);
+//    CloseHandle(displayHandle);
     if (AUTOGUIDER) {
         exitMotor(1);
         disableMotor(1);
@@ -196,27 +236,51 @@ inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErro
     double xMean =  (double) (Nd + 1) / (double) 2;
     double xixbaryiybarX = 0, xixbaryiybarY = 0;
     double xixbarsq = 0;
+    double integralErrorVoltageX = 0;
+    double integralErrorVoltageY = 0;
+    double derivativeErrorVoltageX = 0;
+    double derivativeErrorVoltageY = 0;
 
     toCorrectXTemp = -1 * XTemp;
     toCorrectYTemp = -1 * YTemp;
 
     double correctionShiftX, correctionShiftY;
-    if (integralErrorX.size() == Ni) {
-        integralErrorX.pop_front();
-        integralErrorY.pop_front();
+
+    if (Ni > 0) {
+        if (integralErrorX.size() == Ni) {
+            integralErrorX.pop_front();
+            integralErrorY.pop_front();
+        }
+        integralErrorX.push_back(toCorrectXTemp);
+        integralErrorY.push_back(toCorrectYTemp);
+
+        if (integralErrorX.size() < Ni) {
+            integralErrorVoltageX = 0;
+            integralErrorVoltageY = 0;
+        } else {
+            integralErrorVoltageX = accumulate(integralErrorX.end() - Ni, integralErrorX.end(), 0.0) / Ni;
+            integralErrorVoltageY = accumulate(integralErrorY.end() - Ni, integralErrorY.end(), 0.0) / Ni;
+        }
     }
-    integralErrorX.push_back(toCorrectXTemp);
-    integralErrorY.push_back(toCorrectYTemp);
-
-    double integralErrorVoltageX = 0;
-    double integralErrorVoltageY = 0;
-
-    if (integralErrorX.size() < Ni) {
-        integralErrorVoltageX = 0;
-        integralErrorVoltageY = 0;
-    } else {
-        integralErrorVoltageX = accumulate(integralErrorX.end() - Nd, integralErrorX.end(), 0.0) / Ni;
-        integralErrorVoltageY = accumulate(integralErrorY.end() - Nd, integralErrorY.end(), 0.0) / Ni;
+    else {
+        if (integralErrorX.empty()) {
+            integralErrorX.push_back(toCorrectXTemp);
+            integralErrorY.push_back(toCorrectYTemp);
+            integralErrorVoltageX = 0;
+            integralErrorVoltageY = 0;
+        }
+        else {
+            double sumX = integralErrorX.front();
+            double sumY = integralErrorY.front();
+            integralErrorX.pop_front();
+            integralErrorY.pop_front();
+            sumX += toCorrectXTemp;
+            sumY += toCorrectYTemp;
+            integralErrorX.push_back(sumX);
+            integralErrorY.push_back(sumY);
+            integralErrorVoltageX = sumX / (curr_count + 1);
+            integralErrorVoltageY = sumY / (curr_count + 1);
+        }
     }
 
     if (derivativeErrorX.size() == Nd) {
@@ -225,9 +289,6 @@ inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErro
     }
     derivativeErrorX.push_back(toCorrectXTemp);
     derivativeErrorY.push_back(toCorrectYTemp);
-
-    double derivativeErrorVoltageX = 0;
-    double derivativeErrorVoltageY = 0;
 
     if (derivativeErrorX.size() < Nd) {
         derivativeErrorVoltageX = 0;
@@ -256,14 +317,54 @@ inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErro
         derivativeErrorVoltageY = xixbaryiybarY / xixbarsq;
     }
 
+    double integralContributionX = Ki * integralErrorVoltageX;
+    double integralContributionY = Ki * integralErrorVoltageY;
 
-    correctionShiftX = Kp * toCorrectXTemp + Ki * integralErrorVoltageX + Kd * derivativeErrorVoltageX;
-    correctionShiftY = Kp * toCorrectYTemp + Ki * integralErrorVoltageY + Kd * derivativeErrorVoltageY;
+    if (integralContributionX <= limMinInt) {
+        integralContributionX = limMinInt;
+    }
+    if (integralContributionX >= limMaxInt) {
+        integralContributionX = limMaxInt;
+    }
+    if (integralContributionY <= limMinInt) {
+        integralContributionY = limMinInt;
+    }
+    if (integralContributionY >= limMaxInt) {
+        integralContributionY = limMaxInt;
+    }
+    correctionShiftX = Kp * toCorrectXTemp + integralContributionX + Kd * derivativeErrorVoltageX;
+    correctionShiftY = Kp * toCorrectYTemp + integralContributionX + Kd * derivativeErrorVoltageY;
+
+    if (correctionShiftX <= limMin) {
+        correctionShiftX = limMin;
+    }
+    if (correctionShiftX >= limMax) {
+        correctionShiftX = limMax;
+    }
+    if (correctionShiftY <= limMin) {
+        correctionShiftY = limMin;
+    }
+    if (correctionShiftY >= limMax) {
+        correctionShiftY = limMax;
+    }
+//    PIDController_Update(&pidX, 0, toCorrectXTemp);
+//    PIDController_Update(&pidY, 0, toCorrectYTemp);
 
     *correctionX = A00*correctionShiftX + A01*correctionShiftY;
     *correctionY = A10*correctionShiftX + A11*correctionShiftY;
 
-    sprintf(logString, "%ld, %ld, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf", curr_count, nbImagesReceived, toCorrectXTemp, toCorrectYTemp, integralErrorVoltageX, integralErrorVoltageY, derivativeErrorVoltageX, derivativeErrorVoltageY, correctionShiftX, correctionShiftY, *correctionX, *correctionY);
+//    *correctionX = A00 * pidX.out + A01 * pidY.out;
+//    *correctionY = A10 * pidX.out + A11 * pidY.out;
+
+//    sprintf(logString, "%ld, %ld, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf", curr_count, nbImagesReceived, toCorrectXTemp, toCorrectYTemp, pidX.integrator, pidY.integrator, pidX.differentiator, pidY.differentiator, pidX.out, pidY.out, *correctionX, *correctionY);
+    sprintf(
+        logString,
+        "%ld, %ld, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf",
+        curr_count, nbImagesReceived, toCorrectXTemp, toCorrectYTemp,
+        integralContributionX, integralContributionY, derivativeErrorVoltageX,
+        derivativeErrorVoltageY, correctionShiftX, correctionShiftY,
+        *correctionX, *correctionY
+    );
     shift_uncorected_log(logString);
     return 0;
 }
@@ -281,7 +382,7 @@ inline void closedLoopCallBack(
         double *CurrentImage, fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, int fpsCamera,
         uint16_t* const binnedImage, int ACQMODE, uint16_t* rotatingCounter,
-        double *sumX, double *sumY, int AUTOGUIDERMODE
+        double *sumX, double *sumY, int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY
         )
 {
 
@@ -292,11 +393,8 @@ inline void closedLoopCallBack(
 //        *rotatingCounter = 0;
 //    }
     tuple<double, double> XYIND;
-    int status, statusApply=0;
     double XTemp, YTemp;
     double correctionX, correctionY;
-
-    int this_indice = *rotatingCounter;
 
     bin_separately(Image, binnedImage);
 
@@ -317,14 +415,6 @@ inline void closedLoopCallBack(
         XTemp = get<0>(XYIND);
         YTemp = get<1>(XYIND);
 
-//        if ( (abs(XTemp) > 4) || (abs(YTemp) > 4) ) {
-//            *counter += 1;
-//            *curr_count += 1;
-//            *rotatingCounter += 1;
-//            sprintf(logString, "%ld, %lf, %lf", *curr_count, -XTemp, -YTemp);
-//            ignored_shift_log(logString);
-//            return;
-//        }
         *sumX -= XTemp;
         *sumY -= YTemp;
 
@@ -336,8 +426,12 @@ inline void closedLoopCallBack(
         if (*rotatingCounter == 10 * fpsCamera) {
             if (AUTOGUIDERMODE == 1) {
                 unique_lock<mutex> aul(autoGuiderMutex);
-                int autoCorX = int(AA00 * *sumX + AA01 * *sumY);
-                int autoCorY = int(AA10 * *sumX + AA11 * *sumY);
+                double meanVoltX = (*sumVoltageX / *curr_count) - 60;
+                double meanVoltY = (*sumVoltageY / *curr_count) - 60;
+                double pixelShiftX = ClM00 * meanVoltX + ClM01 * meanVoltY;
+                double pixelShiftY = ClM10 * meanVoltX + ClM11 * meanVoltY;
+                int autoCorX = int(0.5 * (AA00 * pixelShiftX + AA01 * pixelShiftY));
+                int autoCorY = int(0.5 * (AA10 * pixelShiftX + AA11 * pixelShiftY));
                 autoGuiderQueue.push_back(autoCorX);
                 autoGuiderQueue.push_back(autoCorY);
                 autoGuiderReady = true;
@@ -346,8 +440,8 @@ inline void closedLoopCallBack(
                 aul.lock();
                 autoGuiderConditionalVariable.wait(aul, [](){return !autoGuiderReady;});
                 aul.unlock();
-                sprintf(logString, "%lf, %lf, %d, %d", *sumX, *sumY, autoCorX, autoCorY);
-                autoguider_log(logString);
+                sprintf(logString_3, "%lf, %lf, %d, %d", pixelShiftX, pixelShiftY, autoCorX, autoCorY);
+                autoguider_log(logString_3);
             }
             *rotatingCounter = 0;
         }
@@ -366,21 +460,23 @@ inline void closedLoopCallBack(
                 *error_no = 0;
             }
             if (*error_no == 0) {
-                int pending=0;
                 *XShift += correctionX;
                 *YShift += correctionY;
+                *sumVoltageX += *XShift;
+                *sumVoltageY += *YShift;
                 unique_lock<mutex> ul(tipTiltMutex);
-                pending = tipTiltQueue.size() / 2;
                 tipTiltQueue.push_back(*XShift);
                 tipTiltQueue.push_back(*YShift);
+                tipTiltQueue.push_back(-XTemp);
+                tipTiltQueue.push_back(-YTemp);
+                tipTiltQueue_2.push_back(*curr_count);
+                tipTiltQueue_2.push_back(nbImagesReceived);
                 tipTiltReady = true;
                 ul.unlock();
                 tipTiltConditionalVariable.notify_one();
                 ul.lock();
                 tipTiltConditionalVariable.wait(ul, []() { return !tipTiltReady; });
                 ul.unlock();
-                sprintf(logString, "%ld, %ld, %lf, %lf, %lf, %lf, %d", *curr_count, nbImagesReceived, -XTemp, -YTemp, *XShift, *YShift, pending);
-                shift_log(logString);
             }
         }
         *counter += 1;
@@ -390,7 +486,9 @@ inline void closedLoopCallBack(
 }
 
 DWORD WINAPI closedLoopVoltageThread(LPVOID lparam) {
-    double XXShift, YYShift;
+    double XXShift, YYShift, XTemp, YTemp;
+    uint64_t curr_count, nbImagesReceived;
+    int pending = 0;
     while (true) {
         unique_lock<mutex> ul(tipTiltMutex);
         tipTiltConditionalVariable.wait(ul, []() { return tipTiltReady; });
@@ -398,10 +496,21 @@ DWORD WINAPI closedLoopVoltageThread(LPVOID lparam) {
         tipTiltQueue.pop_front();
         YYShift = tipTiltQueue.front();
         tipTiltQueue.pop_front();
+        XTemp = tipTiltQueue.front();
+        tipTiltQueue.pop_front();
+        YTemp = tipTiltQueue.front();
+        tipTiltQueue.pop_front();
+        curr_count = tipTiltQueue_2.front();
+        tipTiltQueue_2.pop_front();
+        nbImagesReceived = tipTiltQueue_2.front();
+        tipTiltQueue_2.pop_front();
+        pending = tipTiltQueue.size() / 2;
         tipTiltReady = false;
         ul.unlock();
         tipTiltConditionalVariable.notify_one();
         setVoltagesXY(XXShift, YYShift);
+        sprintf(logString_2, "%llu, %llu, %lf, %lf, %lf, %lf, %d", curr_count, nbImagesReceived, XTemp, YTemp, XXShift, YYShift, pending);
+        shift_log(logString_2);
     }
 }
 
@@ -419,5 +528,24 @@ DWORD WINAPI closedLoopAutoGuiderThread(LPVOID lparam) {
         autoGuiderConditionalVariable.notify_one();
         setMotorCount(2, sgn(XXShift), XXShift);
         setMotorCount(1, sgn(YYShift), YYShift);
+    }
+}
+
+DWORD WINAPI displayThread(LPVOID lparam) {
+    cv::Mat img;
+    double *image = (double*) malloc(sizeof(double) * NX * NY);
+    while (true) {
+        unique_lock<mutex> dul(displayMutex);
+        displayConditionalVariable.wait(dul, [](){return displayReady;});
+        for (unsigned ind =0; ind < NX * NY; ind++) {
+            image[ind] = displayQueue.front();
+            displayQueue.pop_front();
+        }
+        displayReady = false;
+        dul.unlock();
+        displayConditionalVariable.notify_one();
+        const cv::Mat img(cv::Size(NX, NY), CV_64FC1, image);
+        cv::imshow("Display Window", img);
+        cv::waitKey(1);
     }
 }

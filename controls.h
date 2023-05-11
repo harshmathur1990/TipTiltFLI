@@ -23,6 +23,7 @@ using namespace std;
 string XCommand, YCommand;
 HANDLE XPort, YPort;
 extern double A00, A01, A10, A11;
+extern double ClM00, ClM01, ClM10, ClM11;
 char COMMAND[16];
 DWORD dwBytesWritten;
 int nWriteBytes;
@@ -38,6 +39,17 @@ extern double Vxoff, Vyoff, SlewRate;
 extern double Kp, Kd, Ki;
 extern int Nd, Ni;
 extern double AA00, AA01, AA10, AA11; // Autoguider control matrix
+extern double tau;
+/* Output limits */
+extern double limMin;
+extern double limMax;
+
+/* Integrator limits */
+extern double limMinInt;
+extern double limMaxInt;
+
+/* Sample time (in seconds) */
+extern double sampleTime;
 extern int (*loggingfunc) (std::string);
 extern char logString[100000];
 
@@ -130,7 +142,10 @@ HANDLE getSerialHandle(const char* COMPort){
 }
 
 int sendCommand(HANDLE SerialHandle, string Command){
-    strncpy(COMMAND, Command.c_str(), 14);
+//    strncpy(COMMAND, Command.c_str(), 14);
+    strncpy_s(COMMAND, 16, Command.c_str(), 14);
+    COMMAND[14] = 13; // CR
+    COMMAND[15] = 10; // LF
     sprintf(logString, "Command : %s", Command.c_str());
     loggingfunc(logString);
     PurgeComm(SerialHandle, PURGE_RXABORT|PURGE_RXCLEAR|PURGE_TXABORT|PURGE_TXCLEAR);
@@ -174,7 +189,8 @@ int initDAQ(){
     Err = sendCommand(XPort, "modon,0,1");
     sprintf(logString, "Enabling modulation input for Y actuator ");
     log(logString);
-    Err = sendCommand(YPort, "modon,0,1");
+    Err = sendCommand(YPort, "modon,0,1")
+            ;
     return 0;
 }
 
@@ -262,6 +278,10 @@ int getCalibrationMatrix(){
     CM[2] = stod(Value);
     getline(Row, Value, ',');
     CM[3] = stod(Value);
+    ClM00 = CM[0];
+    ClM01 = CM[1];
+    ClM10 = CM[2];
+    ClM11 = CM[3];
 //    cout << "Calibration matrix is : " << CM[0] << ", " << CM[1] << ", " << CM[2] << ", " << CM[3] << endl;
     sprintf(logString, "Calibration matrix is : %.2f, %.2f, %.2f, %.2f", CM[0], CM[1], CM[2], CM[3]);
     log(logString);
@@ -329,6 +349,23 @@ int getCalibrationMatrix(){
     sprintf(logString, "Autoguider control matrix is : %.2f, %.2f, %.2f, %.2f", AA00, AA01, AA10, AA11);
     log(logString);
 
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    tau = stod(Value);
+    getline(Row, Value, ',');
+    limMin = stod(Value);
+    getline(Row, Value, ',');
+    limMax = stod(Value);
+    getline(Row, Value, ',');
+    limMinInt = stod(Value);
+    getline(Row, Value, ',');
+    limMaxInt = stod(Value);
+    getline(Row, Value, ',');
+    sampleTime = stod(Value);
+
+    sprintf(logString, "tau, limMin, limMax, limMinInt, limMaxInt, sampleTime : %.4f, %.4f, %.4f, %.4f, %.4f, %.4f", tau, limMin, limMax, limMinInt, limMaxInt, sampleTime);
+    log(logString);
 
     calmat.close();
     return 0;

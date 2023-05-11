@@ -1,6 +1,5 @@
 #include "controls.h"
 #include "utilheaders.h"
-
 int XIND=0, YIND=0, MAXIND=16384;
 double W0=0, WX=0, WY=0, WXY=0, ImageMean=0;
 tuple<double, double, double, double> COEFF;
@@ -11,6 +10,7 @@ double A00;
 double A01;
 double A10;
 double A11;
+double ClM00, ClM01, ClM10, ClM11;
 double Vxoff;
 double Vyoff;
 double SlewRate;
@@ -20,6 +20,18 @@ double Ki;
 int Nd;
 int Ni;
 double AA00, AA01, AA10, AA11; // Autoguider control matrix
+double tau;
+
+/* Output limits */
+double limMin;
+double limMax;
+
+/* Integrator limits */
+double limMinInt;
+double limMaxInt;
+
+/* Sample time (in seconds) */
+double sampleTime;
 // Global variables : serialcom
 
 bool COMSEND = FALSE;
