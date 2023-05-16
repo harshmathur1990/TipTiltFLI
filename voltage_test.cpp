@@ -1,5 +1,6 @@
 #include "controls.h"
 #include "utilheaders.h"
+#include <mutex>
 int XIND=0, YIND=0, MAXIND=16384;
 double W0=0, WX=0, WY=0, WXY=0, ImageMean=0;
 tuple<double, double, double, double> COEFF;
@@ -17,11 +18,14 @@ double SlewRate;
 double Kp;
 double Kd;
 double Ki;
+double Akp, Aki, Akd;
+int autoGuiderCorrectionTime;
 int Nd;
 int Ni;
 double AA00, AA01, AA10, AA11; // Autoguider control matrix
+double autoGuiderOffloadLimitX, autoGuiderOffloadLimitY;
 double tau;
-
+int imageSaveAfterSecond;
 /* Output limits */
 double limMin;
 double limMax;
@@ -48,6 +52,11 @@ ofstream logfile;
 ofstream shiftsfile;
 int (*loggingfunc) (std::string)=NULL;
 char logString[100000];
+bool displayReady = false;
+mutex displayMutex;
+deque<double**> displayQueue;
+std::condition_variable displayConditionalVariable;
+int liveView;
 
 int main() {
     setupLogging(3);

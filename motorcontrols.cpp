@@ -27,7 +27,13 @@ int setMotorFrequency(int motorNum, int frequency) {
 
 int setMotorCount(int motorNum, int direction, int counts) {
     std::string directionString = direction == 1?"+":"-";
-    std::string writeWord = std::to_string(motorNum).append(directionString).append(std::to_string(counts));
+    std::string writeWord = std::to_string(
+            motorNum).append(
+                    directionString).append(
+                            std::to_string(
+                                    counts
+                                    )
+                            );
     int status = writeToPort(writeWord);
     return status;
 }

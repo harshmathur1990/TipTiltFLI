@@ -22,9 +22,13 @@ double SlewRate;
 double Kp;
 double Kd;
 double Ki;
+double Akp, Aki, Akd;
+int autoGuiderCorrectionTime;
+double autoGuiderOffloadLimitX, autoGuiderOffloadLimitY;
 int Nd;
 int Ni;
 double AA00, AA01, AA10, AA11; // Autoguider control matrix
+int imageSaveAfterSecond;
 double tau;
 
 /* Output limits */
@@ -48,11 +52,11 @@ auto TNow = chrono::system_clock::now();
 extern FliSdk* fli;
 char logString[100000];
 extern int Err;
+bool displayReady = false;
 mutex displayMutex;
-deque<double> displayQueue;
+deque<double**> displayQueue;
 std::condition_variable displayConditionalVariable;
-bool displayReady;
-
+int liveView;
 int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE);
 
 int main () {
@@ -61,7 +65,8 @@ int main () {
     log(logString);
     // Memory allocation for external variables
     // Other variables
-    int Loop=1, NFRAMES=10, NUM_FRAME_PER_CALIB_POS=1, MODE=ACTUATOR;
+    getDarkFlat();
+    int Loop=1, NFRAMES=100, NUM_FRAME_PER_CALIB_POS=1, MODE=ACTUATOR;
     double ExpTime = 0.0001;
     COMMAND[14] = 13; // CR
     COMMAND[15] = 10; // LF
@@ -69,7 +74,7 @@ int main () {
     // Initialization for high speed
     std::sprintf(logString, "Initializing devices and acquiring one-time data");
     log(logString);
-    initDev(1);
+    initDev(1, 0, "Bias");
 //    Err = getDarkFlat();
 //    for(int i=0; i<NPIX; i++) MasterFlat[i] = 1.0;
     Err = getHammingWindow();
@@ -104,25 +109,36 @@ int main () {
         cin >> MODE;
         cout.flush();
 
+        int xxis = -1;
         // Auto-save dir
 
-        cout << "Starting X Calibration... " << endl;
-        sprintf(logString, "X-Calibration Log");
-        xlog(logString);
-        sprintf(logString, "Number of frames are %d", NFRAMES);
-        xlog(logString);
-        sprintf(logString, "Number of frames per calib position are %d", NUM_FRAME_PER_CALIB_POS);
-        xlog(logString);
-        Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 0, MODE);
+        if (MODE == MOTOR) {
+            cout << "Enter the axis you want to calibrate" << endl;
+            cin >> xxis;
+            cout.flush();
+        }
 
-        cout << "Starting Y Calibration... " << endl;
-        sprintf(logString, "Y-Calibration Log");
-        ylog(logString);
-        sprintf(logString, "Number of frames are ", NFRAMES);
-        ylog(logString);
-        sprintf(logString, "Number of frames per calib position are %d", NUM_FRAME_PER_CALIB_POS);
-        ylog(logString);
-        Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 1, MODE);
+        if (((MODE == MOTOR) && (xxis == 0)) || (MODE == ACTUATOR)) {
+            cout << "Starting X Calibration... " << endl;
+            sprintf(logString, "X-Calibration Log");
+            xlog(logString);
+            sprintf(logString, "Number of frames are %d", NFRAMES);
+            xlog(logString);
+            sprintf(logString, "Number of frames per calib position are %d", NUM_FRAME_PER_CALIB_POS);
+            xlog(logString);
+            Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 0, MODE);
+        }
+
+        if (((MODE == MOTOR) && (xxis == 1)) || (MODE == ACTUATOR)) {
+            cout << "Starting Y Calibration... " << endl;
+            sprintf(logString, "Y-Calibration Log");
+            ylog(logString);
+            sprintf(logString, "Number of frames are ", NFRAMES);
+            ylog(logString);
+            sprintf(logString, "Number of frames per calib position are %d", NUM_FRAME_PER_CALIB_POS);
+            ylog(logString);
+            Err = doCalib(NFRAMES, NUM_FRAME_PER_CALIB_POS, 1, MODE);
+        }
 
         // Option to continue acquisition
         cout << "Press 1 to continue calibration... ";
@@ -172,11 +188,14 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
 
     // DAQ
     Err = initDAQ();
-    CreateControllerConnection(1);
-    enableMotor(1);
-    enableMotor(2);
-    setMotorFrequency(1, 350);
-    setMotorFrequency(2, 350);
+    if (MODE == MOTOR) {
+        CreateControllerConnection(1);
+        enableMotor(1);
+        enableMotor(2);
+        setMotorFrequency(1, 350);
+        setMotorFrequency(2, 350);
+    }
+
 
     // Set calibration range
     double VSTART = -10.0;
@@ -228,6 +247,17 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
     sprintf(logString, "%lf,%lf,0,0", XShift, YShift);
     shiftfunc(logString);
 
+    double fx, fy;
+    if (MODE == MOTOR) {
+        fx = VOTHER;
+        fy = VOTHER;
+    }
+    else {
+        fx = XShift;
+        fy = YShift;
+    }
+    int flatFrameIndice = get_flat_indice(fx, fy);
+
     if (AXIS == 0) XShift += VRANGE/NFRAMES;
     else YShift += VRANGE/NFRAMES;
     if (MODE == ACTUATOR) {
@@ -240,8 +270,9 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
     }
 
 
+
     // Process the reference image
-    Err = processReferenceImage(binnedImage);
+    Err = processReferenceImage(binnedImage, false, flatFrameIndice);
     fopen_s(&fp, fname.c_str(), "wb");
     fwrite(binnedImage, sizeof(*binnedImage), NPIX, fp);
     fclose(fp);
@@ -263,6 +294,15 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
         CorrelatedImage = (double*) calloc(sizeof(double ), NX * NY);
     }
 
+    if (MODE == MOTOR) {
+        fx = VOTHER;
+        fy = VOTHER;
+    }
+    else {
+        fx = XShift;
+        fy = YShift;
+    }
+    flatFrameIndice = get_flat_indice(fx, fy);
     // Subsequent images
     for (i = 1; i < NFRAMES; i++) {
         shift_x=0;
@@ -276,7 +316,9 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
             loggingfunc(logString);
             XYIND = getImageShift(
                     binnedImage,
-                    CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, ll);
+                    CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, ll,
+                    NULL, 0, 0,
+                    false, flatFrameIndice);
             shift_x += get<0>(XYIND);
             shift_y += get<1>(XYIND);
             fopen_s(&fp, fname.c_str(), "wb");
@@ -294,8 +336,18 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
         else {
            setMotorCount(motor, sgn(VRANGE/NFRAMES), int(VRANGE/NFRAMES));
             float64 timeToCompleteMovement = VRANGE * 1000/(350 * NFRAMES);
-            Sleep(timeToCompleteMovement * 3);
+            Sleep(timeToCompleteMovement * 10);
         }
+
+        if (MODE == MOTOR) {
+            fx = VOTHER;
+            fy = VOTHER;
+        }
+        else {
+            fx = XShift;
+            fy = YShift;
+        }
+        flatFrameIndice = get_flat_indice(fx, fy);
 
         // Status bar
         cout << " ";
@@ -331,10 +383,13 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
     sprintf(logString, "Frame rate: %d", NFRAMES/dt.count());
     loggingfunc(logString);
     Err = closeDAQ();
-    exitMotor(1);
-    disableMotor(1);
-    exitMotor(2);
-    disableMotor(2);
-    closeControllerConnection();
+    if (MODE == MOTOR) {
+        exitMotor(1);
+        disableMotor(1);
+        exitMotor(2);
+        disableMotor(2);
+        closeControllerConnection();
+    }
+
     return 0;
 }

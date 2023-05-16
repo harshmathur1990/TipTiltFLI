@@ -33,8 +33,12 @@ public:
                                  fftw_complex *CorrelatedImageFT, double *CorrelatedImage,
                                  int fpsCamera, uint16_t* const binnedImage, int ACQMODE,
                                  uint16_t* rotatingCounter, double *sumX, double *sumY,
-                                 int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY
-            ), uint64_t NREFERESH, double XShift, double YShift, int ACQMODE, int AUTOGUIDERMODE):
+                                 int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY,
+                                 uint64_t *imageSaveCounter, double *integralVoltX, double * integralVoltY,
+                                 bool *updateReference
+            ), uint64_t NREFERESH, double XShift, double YShift,
+            int ACQMODE, int AUTOGUIDERMODE,
+            int imageSaveAfterSecond):
             workFunction(workFunction),
             NREFRESH(NREFERESH),
             XShift(XShift), YShift(YShift),
@@ -48,7 +52,8 @@ public:
             curr_count(0), ignore_count(0), NumRefImage(0),
             status_count(0), error_no(0),
             breakLoop(false), printStats(true),
-            rotatingCounter(0), sumX(0), sumY(0), AUTOGUIDERMODE(AUTOGUIDERMODE)
+            rotatingCounter(0), sumX(0), sumY(0), AUTOGUIDERMODE(AUTOGUIDERMODE),
+            imageSaveCounter(0), integralVoltX(0), integralVoltY(0), updateReference(false)
     {
         if (MODE == INTEL_FFT) {
             int alignment=64;
@@ -100,7 +105,7 @@ public:
             integralErrorX, integralErrorY, derivativeErrorX, derivativeErrorY,
             CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, fpsCamera,
             binnedImage, ACQMODE, &rotatingCounter, &sumX, &sumY, AUTOGUIDERMODE, &sumVoltageX,
-            &sumVoltageY
+            &sumVoltageY, &imageSaveCounter, &integralVoltX, &integralVoltY, &updateReference
         );
 
     }
@@ -118,6 +123,10 @@ public:
     uint16_t* getNextImage() {
         return this->imagePointer;
     };
+
+    double* getCurrentImage() {
+        return this->CurrentImage;
+    }
 
     void setACQMODE(int ACQMODE) {
         this->ACQMODE = ACQMODE;
@@ -140,15 +149,17 @@ private:
         deque<double> &derivativeErrorY, double *CurrentImage, fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, int fpsCamera,
         uint16_t* binnedImage, int ACQMODE, uint16_t* rotatingCounter, double *sumX, double *sumY,
-        int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY
+        int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY,
+        uint64_t *imageSaveCounter, double *integralVoltX, double * integralVoltY,
+        bool *updateReference
     ) = NULL;
     chrono::high_resolution_clock::time_point t0, t1;
     chrono::duration<double> dt;
     double fps;
     double binImgTime, imgWriteTime, imgShiftTime, calcCorrectionTime, applyCorrectionTime, sumX, sumY, sumVoltageX, sumVoltageY;
     uint64_t integralCounter, derivativeCounter, NREFRESH, curr_count, ignore_count, NumRefImage, counter, status_count, error_no;
-    double XShift, YShift;
-    bool breakLoop, printStats;
+    double XShift, YShift, integralVoltX, integralVoltY;
+    bool breakLoop, printStats, updateReference;
     deque<double> integralErrorX;
     deque<double> integralErrorY;
     deque<double> derivativeErrorX;
@@ -159,9 +170,10 @@ private:
     double *CorrelatedImage;
     uint16_t *binnedImage;
     uint16_t rotatingCounter;
+    uint64_t imageSaveCounter;
 };
 
-int initDev(double askfps=0, double asktemp=0) {
+int initDev(double askfps=0, double asktemp=0, string NucMode="BiasFlat") {
 
     std::string cameraName;
     fli = new FliSdk();
@@ -231,6 +243,8 @@ int initDev(double askfps=0, double asktemp=0) {
     cout << "OffsetX: "<< fli->cblueOne()->OffsetX->getValue()<<endl;
     cout << "OffsetY: "<< fli->cblueOne()->OffsetY->getValue()<<endl;
 
+    fli->cblueOne()->setStringFeature("UserSetSelector", "UserSet0");
+
     double fps = fli->cblueOne()->AcquisitionFrameRate->getValue();
     double input=-1;
     cout << "Fps read: " << fps << endl;
@@ -254,7 +268,7 @@ int initDev(double askfps=0, double asktemp=0) {
     exp = fli->cblueOne()->ExposureTime->getValue();
     cout << "Exposure Time read: " << exp << endl;
 
-    fli->cblueOne()->setStringFeature("NucMode", "BiasFlat");
+    fli->cblueOne()->setStringFeature("NucMode", NucMode);
 
     string nucmode="something";
 
@@ -268,6 +282,8 @@ int initDev(double askfps=0, double asktemp=0) {
     cout << "Fps read: " << fps << endl;
     fli->cblueOne()->getStringFeature("NucMode", nucmode);
     cout << "NucMode : "<< nucmode <<endl;
+    fli->cblueOne()->getStringFeature("UserSetSelector", nucmode);
+    cout << "UserSetSelector : "<< nucmode <<endl;
     fpsCamera = int(fps) + 1;
     return 0;
 }

@@ -27,6 +27,30 @@
 
 using namespace std;
 
+double *HammingWindow;
+double *ReferenceImage;
+fftw_complex* ReferenceImageFT;
+DFTI_DESCRIPTOR_HANDLE descHandle;
+fftw_plan PlanForward;
+fftw_plan PlanInverse;
+double **MasterFlat;
+double *xdiff, *ydiff;
+
+constexpr uint16_t LENGTHFLATARR = 31;
+
+int xflatarr[LENGTHFLATARR] = {-20, -15, -10,  -5,   0,   5,  10,  15,  20,  25,  30,  35,  40,
+                               45,  50,  55,  60,  65,  70,  75,  80,  85,  90,  95, 100, 105,
+                               110, 115, 120, 125, 130};
+int yflatarr[LENGTHFLATARR] = {-20, -15, -10,  -5,   0,   5,  10,  15,  20,  25,  30,  35,  40,
+                               45,  50,  55,  60,  65,  70,  75,  80,  85,  90,  95, 100, 105,
+                               110, 115, 120, 125, 130};
+
+extern bool displayReady;
+extern mutex displayMutex;
+extern deque<double**> displayQueue;
+extern std::condition_variable displayConditionalVariable;
+
+
 // Functions
 
 int getHammingWindow();
@@ -38,23 +62,53 @@ inline tuple<double,double,double,double> getGradientSurfaceFit(double* const s)
 inline tuple<double, double> getImageShift(
         uint16_t* const Image,
         double *CurrentImage, fftw_complex *CurrentImageFT,
-        fftw_complex *CorrelatedImageFT, double *CorrelatedImage, uint64_t curr_count);
+        fftw_complex *CorrelatedImageFT, double *CorrelatedImage, uint64_t curr_count,
+        uint64_t* imageSaveCounter, int fpsCamera, int imageSaveAfterSecond,
+        bool useCameraFlat, int flatIndice, int showLive
+        );
 inline void bin_separately(uint16_t* const image, uint16_t* const binned_image);
 void ComputeForward(double* const image, fftw_complex* const imageFT);
 void ComputeBackward(fftw_complex* const imageFT, double* const image);
 int initializeFFT();
 
-double *HammingWindow;
-double *ReferenceImage;
-fftw_complex* ReferenceImageFT;
-DFTI_DESCRIPTOR_HANDLE descHandle;
-fftw_plan PlanForward;
-fftw_plan PlanInverse;
 
-extern bool displayReady;
-extern mutex displayMutex;
-extern deque<double> displayQueue;
-extern std::condition_variable displayConditionalVariable;
+int getDarkFlat(){
+    string flatFilename = "MeanFlat";
+    MasterFlat = (double**)malloc(sizeof(double*) * LENGTHFLATARR * LENGTHFLATARR);
+    for (unsigned i=0;i < LENGTHFLATARR * LENGTHFLATARR; i++) {
+        MasterFlat[i] = (double*)malloc(sizeof(double) * NX * NY);
+        int NFY = i / LENGTHFLATARR;
+        int NFX = i % LENGTHFLATARR;
+        string fname = string("Flats") + "\\" + flatFilename + "_" + to_string(xflatarr[NFY]) + "_" + to_string(NFX) + ".dat";
+        ifstream FlatFile(fname,  ios::binary);
+        uint16_t TEMP;
+        for (unsigned int j=0; j<NX * NY; j++){
+            FlatFile.read((char*) &TEMP, sizeof(uint16_t));
+            MasterFlat[i][j] = 1.0 / TEMP;
+        }
+        FlatFile.close();
+    }
+    xdiff = (double*) calloc(sizeof(double), LENGTHFLATARR);
+    ydiff = (double*) calloc(sizeof(double), LENGTHFLATARR);
+    return 0;
+}
+
+int get_flat_indice(double XShift, double YShift) {
+    int min_indice_x = 0, min_indice_y = 0;
+    xdiff[0] = fabs(signed (xflatarr[0]) - XShift);
+    ydiff[0] = fabs(signed (yflatarr[0]) - YShift);
+    for (unsigned int i=1; i < LENGTHFLATARR;i++) {
+        xdiff[i] = fabs(signed (xflatarr[i]) - XShift);
+        ydiff[i] = fabs(signed (yflatarr[i]) - YShift);
+        if (xdiff[i] < xdiff[min_indice_x]){
+            min_indice_x = i;
+        }
+        if (ydiff[i] < ydiff[min_indice_y]){
+            min_indice_y = i;
+        }
+    }
+    return min_indice_y * LENGTHFLATARR + min_indice_x;
+}
 
 int getHammingWindow() {
     HammingWindow = (double*) malloc(sizeof(double)*NPIX);
@@ -269,15 +323,18 @@ inline tuple<double,double> getSubPixelShift(double* const s, int ind) {
     return XYIND;
 }
 
-inline int processReferenceImage(uint16_t* const Image){
+inline int processReferenceImage(uint16_t* const Image, bool useCameraFlat = true, int flatIndice = 0){
     int XIND, YIND;
     int i=0;
     double ImageMean=0;
     std::tuple<double, double, double, double> COEFF;
     // Dark, flat and normalize
     for (i=0; i<NPIX; i++){ 
-             ReferenceImage[i] = Image[i];
-            ImageMean += ReferenceImage[i];
+        ReferenceImage[i] = Image[i];
+        if (!useCameraFlat) {
+            ReferenceImage[i] *= MasterFlat[flatIndice][i];
+        }
+        ImageMean += ReferenceImage[i];
     }
     ImageMean = NPIX/ImageMean;
     for (i=0; i<NPIX; i++) ReferenceImage[i] *= ImageMean;
@@ -306,7 +363,10 @@ inline int processReferenceImage(uint16_t* const Image){
 inline tuple<double, double> getImageShift(
         uint16_t* const Image, double *CurrentImage,
         fftw_complex *CurrentImageFT,
-        fftw_complex *CorrelatedImageFT, double *CorrelatedImage, uint64_t curr_count
+        fftw_complex *CorrelatedImageFT, double *CorrelatedImage, uint64_t curr_count,
+        uint64_t *imageSaveCounter, int fpsCamera,
+        int imageSaveAfterSecond, bool useCameraFlat = true, int flatIndice = 0,
+        int showLive = 0
         ) {
 
     std::tuple<double, double> XYIND;
@@ -315,15 +375,45 @@ inline tuple<double, double> getImageShift(
     double ImageMean = 0;
     string fname;
     // Reduction
+
+
     for (unsigned int i=0; i<NPIX; i++){
         CurrentImage[i] = Image[i];
+        if (!useCameraFlat) {
+            CurrentImage[i] *= MasterFlat[flatIndice][i];
+        }
         ImageMean += CurrentImage[i];
     }
     ImageMean = NPIX/ImageMean;
     for (unsigned int i=0; i<NPIX; i++){
         CurrentImage[i] *= ImageMean;
     }
+
+    if (showLive) {
+        if (!(curr_count & ((1 << 5) - 1))) {
+            unique_lock<mutex> dul(displayMutex);
+            displayReady = true;
+            dul.unlock();
+            displayConditionalVariable.notify_one();
+            dul.lock();
+            displayConditionalVariable.wait(dul, []() { return !displayReady; });
+            dul.unlock();
+        }
+    }
+
     // Gradient removal and windowing
+
+    if (imageSaveAfterSecond > 0) {
+        FILE *fp;
+        if (*imageSaveCounter == imageSaveAfterSecond * fpsCamera) {
+            fname = string(SAVEPATH) + "//Curr_" +  to_string(curr_count) + ".dat";
+            fopen_s(&fp, fname.c_str(), "wb");
+            fwrite(CurrentImage, sizeof(*CurrentImage), NX * NY, fp);
+            fclose(fp);
+            *imageSaveCounter = 0;
+        }
+        *imageSaveCounter += 1;
+    }
 
     COEFF = getGradientSurfaceFit(CurrentImage);
     double W0 = get<0>(COEFF);
@@ -353,28 +443,6 @@ inline tuple<double, double> getImageShift(
     MAXIND = distance(CorrelatedImage, max_element(CorrelatedImage, CorrelatedImage+NPIX));
 
     XYIND = getSubPixelShift(CorrelatedImage, MAXIND); // Sub-pixel interpolation
-
-//    FILE *fp;
-//    if ((abs(get<0>(XYIND)) > 10 ) || (abs(get<1>(XYIND)) > 10 ) ) {
-//        fname = string(SAVEPATH) + "//Curr_" +  to_string(curr_count) + ".dat";
-//        fopen_s(&fp, fname.c_str(), "wb");
-//        fwrite(CurrentImage, sizeof(*CurrentImage), NX * NY, fp);
-//        fclose(fp);
-//    }
-
-
-//    if (curr_count & ((1 << 8) - 1) ) {
-//        unique_lock<mutex> dul(displayMutex);
-//        for (unsigned ind=0;ind < NX * NY; ind++) {
-//            displayQueue.push_back(CurrentImage[ind]);
-//        }
-//        displayReady = true;
-//        dul.unlock();
-//        displayConditionalVariable.notify_one();
-//        dul.lock();
-//        displayConditionalVariable.wait(dul, []() { return !displayReady; });
-//        dul.unlock();
-//    }
 
     return XYIND;
 }

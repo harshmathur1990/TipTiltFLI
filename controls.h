@@ -40,6 +40,10 @@ extern double Kp, Kd, Ki;
 extern int Nd, Ni;
 extern double AA00, AA01, AA10, AA11; // Autoguider control matrix
 extern double tau;
+extern double Akp, Aki, Akd;
+extern int autoGuiderCorrectionTime;
+extern double autoGuiderOffloadLimitX, autoGuiderOffloadLimitY;
+extern int imageSaveAfterSecond;
 /* Output limits */
 extern double limMin;
 extern double limMax;
@@ -47,6 +51,8 @@ extern double limMax;
 /* Integrator limits */
 extern double limMinInt;
 extern double limMaxInt;
+
+extern int liveView;
 
 /* Sample time (in seconds) */
 extern double sampleTime;
@@ -365,6 +371,52 @@ int getCalibrationMatrix(){
     sampleTime = stod(Value);
 
     sprintf(logString, "tau, limMin, limMax, limMinInt, limMaxInt, sampleTime : %.4f, %.4f, %.4f, %.4f, %.4f, %.4f", tau, limMin, limMax, limMinInt, limMaxInt, sampleTime);
+    log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    Akp = stod(Value);
+    getline(Row, Value, ',');
+    Akd = stod(Value);
+    getline(Row, Value, ',');
+    Aki = stod(Value);
+
+    sprintf(logString, "Akp, Akd, Aki : %.4f, %.4f, %.4f", Akp, Akd, Aki);
+    log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    autoGuiderCorrectionTime = stoi(Value);
+
+    sprintf(logString, "autoGuiderCorrectionTime: %d", autoGuiderCorrectionTime);
+    log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    imageSaveAfterSecond = stoi(Value);
+
+    sprintf(logString, "imageSaveAfterSecond: %d", imageSaveAfterSecond);
+    log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    autoGuiderOffloadLimitX = stod(Value);
+    getline(Row, Value, ',');
+    autoGuiderOffloadLimitY = stod(Value);
+
+    sprintf(logString, "autoGuiderOffloadLimitX, autoGuiderOffloadLimitY: %.4f, %.4f", autoGuiderOffloadLimitX, autoGuiderOffloadLimitY);
+    log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    liveView = stoi(Value);
+
+    sprintf(logString, "liveView: %d", liveView);
     log(logString);
 
     calmat.close();
