@@ -57,6 +57,9 @@ mutex displayMutex;
 deque<double**> displayQueue;
 std::condition_variable displayConditionalVariable;
 int liveView;
+bool useCameraFlat;
+string NucMode;
+
 int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE);
 
 int main () {

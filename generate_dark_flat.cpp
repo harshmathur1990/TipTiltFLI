@@ -53,6 +53,8 @@ ofstream shiftsfile;
 int (*loggingfunc) (std::string) = NULL;
 char logString[100000];
 int liveView;
+bool useCameraFlat;
+string NucMode;
 
 int main() {
     chrono::high_resolution_clock::time_point t0, t1;

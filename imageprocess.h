@@ -305,8 +305,8 @@ inline tuple<double,double> getSubPixelShift(double* const s, int ind) {
     pz = coeff[7];
     pp = coeff[8];
     double xshf = XIND, yshf = YIND;
-    // We are doing this because 0, 0 is in the corner,
-    // not in the center, one can do fftshift and
+    // We are doing this because 0, 0 is not in the center but in the corner,
+    // one can do fftshift and
     // then subtract center coordinates from this,
     // but doing this way is also same
     if (XIND>(NX/2) - 1) { xshf = (signed)XIND - (signed)NX; }
@@ -390,14 +390,11 @@ inline tuple<double, double> getImageShift(
     }
 
     if (showLive) {
-        if (!(curr_count & ((1 << 5) - 1))) {
+        if (!(curr_count & ((1 << 4) - 1))) {
             unique_lock<mutex> dul(displayMutex);
             displayReady = true;
             dul.unlock();
             displayConditionalVariable.notify_one();
-            dul.lock();
-            displayConditionalVariable.wait(dul, []() { return !displayReady; });
-            dul.unlock();
         }
     }
 

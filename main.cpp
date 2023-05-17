@@ -35,6 +35,9 @@ double limMaxInt;
 /* Sample time (in seconds) */
 double sampleTime;
 int liveView;
+bool useCameraFlat;
+string NucMode;
+
 PIDController pidX;
 PIDController pidY;
 char logString[100000],  logString_2[100000], logString_3[100000];
@@ -92,10 +95,12 @@ int main () {
 
 	int  ACQMODE = 1, NREFREFRESH=100, AUTOGUIDER=0;
 
+    Err = getCalibrationMatrix();
+
     sprintf(logString, "Initializing devices and acquiring one-time data");
     log(logString);
     cout << "Searching for the cameras... " << endl;
-	Err = initDev(1, 0, "Bias");
+	Err = initDev(1, 0, NucMode);
 	if (Err != 0) {
 	    exit(Err);
 	}
@@ -110,7 +115,7 @@ int main () {
     cout << "Opening the serial COM ports... " << endl;
     Err = openXYSerialPorts();
     cout << "Loading the calibration matrix... " << endl;
-    Err = getCalibrationMatrix();
+
 
     pidX = {Kp, Ki, Kd,
                          tau,
@@ -131,12 +136,7 @@ int main () {
     Sleep(LONG_DELAY);
     sendCommand(XPort, "sr,0," + to_string(SlewRate));
     sendCommand(YPort, "sr,0," + to_string(SlewRate));
-//    sendCommand(XPort, "kp,0,0");
-//    sendCommand(XPort, "ki,0,50");
-//    sendCommand(XPort, "kd,0,0");
-//    sendCommand(YPort, "kp,0,0");
-//    sendCommand(YPort, "ki,0,50");
-//    sendCommand(YPort, "kd,0,0");
+
     cout << "Initializing DAQ..." << endl;
     Err = initDAQ();
     setVoltagesXY(Vxoff, Vyoff);
@@ -454,7 +454,7 @@ inline void closedLoopCallBack(
                 CurrentImage, CurrentImageFT, CorrelatedImageFT,
                 CorrelatedImage, *curr_count,
                 imageSaveCounter, fpsCamera, imageSaveAfterSecond,
-                false, flatIndice, liveView);
+                useCameraFlat, flatIndice, liveView);
         XTemp = get<0>(XYIND);
         YTemp = get<1>(XYIND);
 
@@ -469,14 +469,33 @@ inline void closedLoopCallBack(
         if (*rotatingCounter == autoGuiderCorrectionTime * fpsCamera) {
             if (AUTOGUIDERMODE == 1) {
                 unique_lock<mutex> aul(autoGuiderMutex);
-                double meanVoltX = (*sumVoltageX / (*curr_count + 1)) - Vxoff;
-                double meanVoltY = (*sumVoltageY / (*curr_count + 1)) - Vyoff;
-                *integralVoltX += meanVoltX;
-                *integralVoltY += meanVoltY;
-                double corrVoltX = Akp * meanVoltX + Aki * *integralVoltX;
-                double corrVoltY = Akp * meanVoltY + Aki * *integralVoltY;
-                double pixelShiftX = ClM00 * corrVoltX + ClM01 * corrVoltY;
-                double pixelShiftY = ClM10 * corrVoltX + ClM11 * corrVoltY;
+                double meanVoltX;
+                double meanVoltY;
+                double corrVoltX;
+                double corrVoltY;
+                double pixelShiftX;
+                double pixelShiftY;
+                if (ACQMODE == 1) {
+                    meanVoltX = (*sumVoltageX / (*curr_count + 1)) - Vxoff;
+                    meanVoltY = (*sumVoltageY / (*curr_count + 1)) - Vyoff;
+                    *integralVoltX += meanVoltX;
+                    *integralVoltY += meanVoltY;
+                    corrVoltX = Akp * meanVoltX + Aki * *integralVoltX;
+                    corrVoltY = Akp * meanVoltY + Aki * *integralVoltY;
+                    pixelShiftX = ClM00 * corrVoltX + ClM01 * corrVoltY;
+                    pixelShiftY = ClM10 * corrVoltX + ClM11 * corrVoltY;
+                }
+                else {
+                    meanVoltX = *sumX / (*curr_count + 1);
+                    meanVoltY = *sumY / (*curr_count + 1);
+                    *integralVoltX += meanVoltX;
+                    *integralVoltY += meanVoltY;
+                    corrVoltX = Akp * meanVoltX + Aki * *integralVoltX;
+                    corrVoltY = Akp * meanVoltY + Aki * *integralVoltY;
+                    pixelShiftX = corrVoltX;
+                    pixelShiftY = corrVoltY;
+                }
+
                 int autoCorX = int(AA00 * pixelShiftX + AA01 * pixelShiftY);
                 int autoCorY = int(AA10 * pixelShiftX + AA11 * pixelShiftY);
                 autoGuiderQueue.push_back(autoCorX);
@@ -487,7 +506,12 @@ inline void closedLoopCallBack(
                 aul.lock();
                 autoGuiderConditionalVariable.wait(aul, [](){return !autoGuiderReady;});
                 aul.unlock();
-                sprintf(logString_3, "%llu, %lf, %lf, %d, %d", *curr_count, meanVoltX, meanVoltY, autoCorX, autoCorY);
+                sprintf(
+                        logString_3,
+                        "%llu, %lf, %lf, %lf, %lf, %lf, %lf, %d, %d",
+                        *curr_count, meanVoltX, meanVoltY, *integralVoltX,
+                        *integralVoltY, corrVoltX, corrVoltY, autoCorX, autoCorY
+                        );
                 autoguider_log(logString_3);
             }
             *rotatingCounter = 0;
@@ -563,7 +587,7 @@ DWORD WINAPI closedLoopVoltageThread(LPVOID lparam) {
 
 DWORD WINAPI closedLoopAutoGuiderThread(LPVOID lparam) {
     int XXShift, YYShift;
-    int multiplier = double(autoGuiderCorrectionTime) / double(5);
+    int multiplier = autoGuiderCorrectionTime;// / double(5);
     int limiter = multiplier * 350;
     while (true) {
         unique_lock<mutex> aul(autoGuiderMutex);
@@ -593,17 +617,29 @@ DWORD WINAPI closedLoopAutoGuiderThread(LPVOID lparam) {
 }
 
 DWORD WINAPI displayThread(LPVOID lparam) {
-    cv::Mat img;
     double *image = (double *)lparam;
     cv::namedWindow("Live!", cv::WINDOW_NORMAL);
-    cv::resizeWindow("Live!", 256, 256);
+    cv::resizeWindow("Live!", 512, 512);
+    auto imageEightBit = new uint8_t[NX * NY];
+    auto image64Bit = new double[NX * NY];
+    double min, max;
+    double multiplyFactor;
     while (true) {
         unique_lock<mutex> dul(displayMutex);
         displayConditionalVariable.wait(dul, [](){return displayReady;});
         displayReady = false;
         dul.unlock();
-        displayConditionalVariable.notify_one();
-        const cv::Mat img(cv::Size(NX, NY), CV_64FC1, image);
+        min = *(min_element(image, image + NPIX));
+        max = *(max_element(image, image + NPIX));
+        for (unsigned i=0;i < NX * NY; i++) {
+            image64Bit[i] = image[i] - min;
+        }
+        max = max - min;
+        multiplyFactor = 1 / max;
+        for (unsigned i=0;i < NX * NY; i++) {
+            imageEightBit[i] = 255 * image64Bit[i] * multiplyFactor;
+        }
+        const cv::Mat img(cv::Size(NX, NY), CV_8UC1, imageEightBit);
         cv::imshow("Live!", img);
         cv::waitKey(1);
     }

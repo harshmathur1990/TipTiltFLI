@@ -57,6 +57,8 @@ mutex displayMutex;
 deque<double**> displayQueue;
 std::condition_variable displayConditionalVariable;
 int liveView;
+bool useCameraFlat;
+string NucMode;
 
 int main() {
     setupLogging(3);

@@ -110,15 +110,20 @@ int getFFTWPlans(DFTI_DESCRIPTOR_HANDLE *descHandle){
         return -5;
     }
 
-    MKL_LONG strides[2];
-    strides[0] = NN;
+    MKL_LONG strides[3];
+    strides[0] = 0;
     strides[1] = 1;
+    strides[3] = NN;
 
     status = DftiSetValue(*descHandle, DFTI_INPUT_STRIDES, strides);
     if (status != 0) {
         cout << "DftiSetValue DFTI_INPUT_STRIDES failed : " << status << endl;
         return -6;
     }
+
+    strides[0] = 0;
+    strides[1] = 1;
+    strides[3] = NN / 2;
 
     status = DftiSetValue(*descHandle, DFTI_OUTPUT_STRIDES, strides);
     if (status != 0) {

@@ -54,6 +54,9 @@ extern double limMaxInt;
 
 extern int liveView;
 
+extern bool useCameraFlat;
+extern string NucMode;
+
 /* Sample time (in seconds) */
 extern double sampleTime;
 extern int (*loggingfunc) (std::string);
@@ -417,6 +420,20 @@ int getCalibrationMatrix(){
     liveView = stoi(Value);
 
     sprintf(logString, "liveView: %d", liveView);
+    log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    int x = stoi(Value);
+
+    if (x) useCameraFlat = true;
+    else useCameraFlat = false;
+
+    if (useCameraFlat) NucMode = "BiasFlat";
+    else NucMode = "Bias";
+
+    sprintf(logString, "useCameraFlat, NucMode: %d, %s", useCameraFlat, NucMode.c_str());
     log(logString);
 
     calmat.close();
