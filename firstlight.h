@@ -32,10 +32,11 @@ public:
                                  double *CurrentImage, fftw_complex *CurrentImageFT,
                                  fftw_complex *CorrelatedImageFT, double *CorrelatedImage,
                                  int fpsCamera, uint16_t* const binnedImage, int ACQMODE,
-                                 uint16_t* rotatingCounter, double *sumX, double *sumY,
+                                 uint64_t* rotatingCounter, double *sumX, double *sumY,
                                  int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY,
                                  uint64_t *imageSaveCounter, double *integralVoltX, double * integralVoltY,
-                                 bool *updateReference
+                                 bool *updateReference, bool *offloadShiftsToAutoguider, uint32_t* autoGuiderCounter,
+                                 double* meanVoltX, double* meanVoltY
             ), uint64_t NREFERESH, double XShift, double YShift,
             int ACQMODE, int AUTOGUIDERMODE,
             int imageSaveAfterSecond):
@@ -53,7 +54,9 @@ public:
             status_count(0), error_no(0),
             breakLoop(false), printStats(true),
             rotatingCounter(0), sumX(0), sumY(0), AUTOGUIDERMODE(AUTOGUIDERMODE),
-            imageSaveCounter(0), integralVoltX(0), integralVoltY(0), updateReference(false)
+            imageSaveCounter(0), integralVoltX(0), integralVoltY(0), updateReference(true),
+            autoGuiderCounter(fpsCamera), offloadShiftsToAutoguider(false),
+            meanVoltX(0), meanVoltY(0)
     {
         if (MODE == INTEL_FFT) {
             int alignment=64;
@@ -105,7 +108,8 @@ public:
             integralErrorX, integralErrorY, derivativeErrorX, derivativeErrorY,
             CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, fpsCamera,
             binnedImage, ACQMODE, &rotatingCounter, &sumX, &sumY, AUTOGUIDERMODE, &sumVoltageX,
-            &sumVoltageY, &imageSaveCounter, &integralVoltX, &integralVoltY, &updateReference
+            &sumVoltageY, &imageSaveCounter, &integralVoltX, &integralVoltY, &updateReference,
+            &offloadShiftsToAutoguider, &autoGuiderCounter, &meanVoltX, &meanVoltY
         );
 
     }
@@ -126,7 +130,11 @@ public:
 
     double* getCurrentImage() {
         return this->CurrentImage;
-    }
+    };
+
+    uint64_t* getCurrCount() {
+        return &this->curr_count;
+    };
 
     void setACQMODE(int ACQMODE) {
         this->ACQMODE = ACQMODE;
@@ -148,10 +156,11 @@ private:
         deque<double> &integralErrorX, deque<double> &integralErrorY, deque<double> &derivativeErrorX,
         deque<double> &derivativeErrorY, double *CurrentImage, fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, int fpsCamera,
-        uint16_t* binnedImage, int ACQMODE, uint16_t* rotatingCounter, double *sumX, double *sumY,
+        uint16_t* binnedImage, int ACQMODE, uint64_t* rotatingCounter, double *sumX, double *sumY,
         int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY,
         uint64_t *imageSaveCounter, double *integralVoltX, double * integralVoltY,
-        bool *updateReference
+        bool *updateReference, bool *offloadShiftsToAutoguider, uint32_t* autoGuiderCounter,
+        double* meanVoltX, double* meanVoltY
     ) = NULL;
     chrono::high_resolution_clock::time_point t0, t1;
     chrono::duration<double> dt;
@@ -159,7 +168,7 @@ private:
     double binImgTime, imgWriteTime, imgShiftTime, calcCorrectionTime, applyCorrectionTime, sumX, sumY, sumVoltageX, sumVoltageY;
     uint64_t integralCounter, derivativeCounter, NREFRESH, curr_count, ignore_count, NumRefImage, counter, status_count, error_no;
     double XShift, YShift, integralVoltX, integralVoltY;
-    bool breakLoop, printStats, updateReference;
+    bool breakLoop, printStats, updateReference, offloadShiftsToAutoguider;
     deque<double> integralErrorX;
     deque<double> integralErrorY;
     deque<double> derivativeErrorX;
@@ -169,8 +178,10 @@ private:
     fftw_complex *CorrelatedImageFT;
     double *CorrelatedImage;
     uint16_t *binnedImage;
-    uint16_t rotatingCounter;
+    uint64_t rotatingCounter;
     uint64_t imageSaveCounter;
+    uint32_t autoGuiderCounter;
+    double meanVoltX, meanVoltY;
 };
 
 int initDev(double askfps=0, double asktemp=0, string NucMode="BiasFlat") {

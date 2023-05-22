@@ -22,7 +22,7 @@ int setProgressBar(int i, int NFRAMES);
 
 int getDateTimeDirName(){
     std::time_t TIME = std::time(NULL);
-    std::strftime(SAVEPATH, sizeof(SAVEPATH), "\\%Y%m%d_%H%M%S", std::localtime(&TIME));
+    std::strftime(SAVEPATH, sizeof(SAVEPATH), "F:\\tiptilt\\%Y%m%d_%H%M%S", std::localtime(&TIME));
     cout << "Auto-save directory : " << SAVEPATH << endl;
     // CreateDirectory(SAVEPATH ,NULL);
     logfile << "Creating auto-save directory : " << string(SAVEPATH) << endl;

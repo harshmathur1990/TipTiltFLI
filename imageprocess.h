@@ -35,7 +35,7 @@ fftw_plan PlanForward;
 fftw_plan PlanInverse;
 double **MasterFlat;
 double *xdiff, *ydiff;
-
+extern uint64_t displayCount;
 constexpr uint16_t LENGTHFLATARR = 31;
 
 int xflatarr[LENGTHFLATARR] = {-20, -15, -10,  -5,   0,   5,  10,  15,  20,  25,  30,  35,  40,
@@ -393,6 +393,7 @@ inline tuple<double, double> getImageShift(
         if (!(curr_count & ((1 << 4) - 1))) {
             unique_lock<mutex> dul(displayMutex);
             displayReady = true;
+//            displayCount = curr_count;
             dul.unlock();
             displayConditionalVariable.notify_one();
         }

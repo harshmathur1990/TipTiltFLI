@@ -59,6 +59,7 @@ std::condition_variable displayConditionalVariable;
 int liveView;
 bool useCameraFlat;
 string NucMode;
+double autoGuiderVoltX, autoGuiderVoltY;
 
 int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE);
 
@@ -77,7 +78,7 @@ int main () {
     // Initialization for high speed
     std::sprintf(logString, "Initializing devices and acquiring one-time data");
     log(logString);
-    initDev(1, 0, "Bias");
+    initDev(1, 0, "BiasFlat");
 //    Err = getDarkFlat();
 //    for(int i=0; i<NPIX; i++) MasterFlat[i] = 1.0;
     Err = getHammingWindow();
@@ -275,10 +276,10 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
 
 
     // Process the reference image
-    Err = processReferenceImage(binnedImage, false, flatFrameIndice);
-    fopen_s(&fp, fname.c_str(), "wb");
-    fwrite(binnedImage, sizeof(*binnedImage), NPIX, fp);
-    fclose(fp);
+    Err = processReferenceImage(binnedImage, true, flatFrameIndice);
+//    fopen_s(&fp, fname.c_str(), "wb");
+//    fwrite(binnedImage, sizeof(*binnedImage), NPIX, fp);
+//    fclose(fp);
     Current++;
     double *CurrentImage;
     fftw_complex* CurrentImageFT;
@@ -321,12 +322,12 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
                     binnedImage,
                     CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, ll,
                     NULL, 0, 0,
-                    false, flatFrameIndice);
+                    true, flatFrameIndice);
             shift_x += get<0>(XYIND);
             shift_y += get<1>(XYIND);
-            fopen_s(&fp, fname.c_str(), "wb");
-            fwrite(binnedImage, sizeof(*binnedImage), NPIX, fp);
-            fclose(fp);
+//            fopen_s(&fp, fname.c_str(), "wb");
+//            fwrite(binnedImage, sizeof(*binnedImage), NPIX, fp);
+//            fclose(fp);
         }
 
 //        sprintf(tempLogString, "%lf,%lf,", XShift, YShift);
@@ -360,7 +361,7 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
 
         // Process the current image
 //        XYIND = getImageShift(binnedImage);
-        sprintf(logString, "%s%lf,%lf", tempLogString, shift_x, shift_y);
+        sprintf(logString, "%s%lf,%lf", tempLogString, shift_x / NUM_FRAME_PER_CALIB_POS, shift_y / NUM_FRAME_PER_CALIB_POS);
         shiftfunc(logString);
 
 

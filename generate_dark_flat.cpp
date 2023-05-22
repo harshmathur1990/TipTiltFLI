@@ -55,6 +55,14 @@ char logString[100000];
 int liveView;
 bool useCameraFlat;
 string NucMode;
+[[noreturn]] DWORD WINAPI displayThread(LPVOID lparam);
+uint16_t* image;
+uint16_t *binnedImage;
+uint32_t *MeanImage;
+
+bool displayReady;
+mutex displayMutex;
+std::condition_variable displayConditionalVariable;
 
 int main() {
     chrono::high_resolution_clock::time_point t0, t1;
@@ -64,11 +72,11 @@ int main() {
     initDev(1, 0, "Bias");
     int NFRAMES=100;
     ofstream ImOut;
-    uint16_t *Image;
-    uint16_t *binnedImage = (uint16_t*)calloc(NX*NY, sizeof(uint16_t));
-    uint32_t *MeanImage = (uint32_t*)calloc(NX*NY, sizeof(uint32_t));
+    binnedImage = (uint16_t*)calloc(NX*NY, sizeof(uint16_t));
+    MeanImage = (uint32_t*)calloc(NX*NY, sizeof(uint32_t));
     std::string flatFilename = "MeanFlat";
-
+    DWORD displayThreadID;
+    HANDLE displayHandle;
     Err = openXYSerialPorts();
     COMMAND[14] = 13; // CR
     COMMAND[15] = 10; // LF
@@ -78,22 +86,29 @@ int main() {
     startCamera();
 
     fli->imageProcessing()->enableAutoClip(true);
-
+//    displayHandle = CreateThread(0, 0, displayThread, NULL, 0, &displayThreadID);
     int counter = 0;
     for (int y=-20; y <= 130; y+= 5) {
         for (int x=-20;x<=130;x += 5) {
             setVoltagesXY(x, y);
-            for (int j=0;j < NX*NY;j++) {
-                MeanImage[j] = 0;
+            for (unsigned int m=0; m < NX*NY; m++) {
+                MeanImage[m] = 0;
             }
-            for (int i=0;i<NFRAMES;i++) {
-                Image = (uint16_t*)fli->getRawImage();
-                bin_separately(Image, binnedImage);
-                for (int j=0;j < NX*NY;j++) {
-                    MeanImage[j] += binnedImage[j];
+            for (unsigned int i=0;i<NFRAMES;i++) {
+                image = (uint16_t*)fli->getRawImage();
+                bin_separately(image, binnedImage);
+//                unique_lock<mutex> dul(displayMutex);
+//                displayReady = true;
+//                dul.unlock();
+//                displayConditionalVariable.notify_one();
+//                dul.lock();
+//                displayConditionalVariable.wait(dul, [](){return !displayReady;});
+//                dul.unlock();
+                for (unsigned int k=0;k < NX*NY;k++) {
+                    MeanImage[k] = MeanImage[k] + *(binnedImage + k);
                 }
             }
-            for (int j=0;j < NX*NY;j++) {
+            for (unsigned int j=0;j < NX*NY;j++) {
                 binnedImage[j] = MeanImage[j] / NFRAMES;
             }
             FILE *fp;
@@ -109,6 +124,7 @@ int main() {
     }
 
     stopCamera();
+//    CloseHandle(displayHandle);
     t1 = chrono::high_resolution_clock::now();
     dt = chrono::duration_cast<chrono::duration<double>>(t1 - t0);
 
@@ -123,4 +139,36 @@ int main() {
     cout << "Enter a key to exit"<<endl;
     cin>>NFRAMES;
     return 0;
+}
+
+DWORD WINAPI displayThread(LPVOID lparam) {
+    cv::namedWindow("Live!", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Live!", NX, NY);
+    auto imageEightBit = new uint8_t[NX * NY];
+    auto image32Bit = new uint32_t[NX * NY];
+    double min, max;
+    double multiplyFactor;
+    while (true) {
+        unique_lock<mutex> dul(displayMutex);
+        displayConditionalVariable.wait(dul, [](){return displayReady;});
+        for (unsigned i=0;i < NX * NY; i++) {
+            image32Bit[i] = MeanImage[i];
+        }
+        displayReady = false;
+        dul.unlock();
+        displayConditionalVariable.notify_one();
+        min = *(min_element(image32Bit, image32Bit + NPIX));
+        max = *(max_element(image32Bit, image32Bit + NPIX));
+        for (unsigned i=0;i < NX * NY; i++) {
+            image32Bit[i] = image32Bit[i] - min;
+        }
+        max = max - min;
+        multiplyFactor = 1 / max;
+        for (unsigned i=0;i < NX * NY; i++) {
+            imageEightBit[i] = 255 * image32Bit[i] * multiplyFactor;
+        }
+        const cv::Mat img(cv::Size(NX, NY), CV_8UC1, imageEightBit);
+        cv::imshow("Live!", img);
+        cv::waitKey(1);
+    }
 }

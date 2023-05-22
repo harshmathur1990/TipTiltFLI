@@ -58,8 +58,8 @@ target_link_libraries(CalibrateXY $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCL
 add_executable(VoltageShiftMatrix make_calibration_matrix.cpp)
 
 add_executable(DarkFlat generate_dark_flat.cpp utilheaders.h utils.cpp imageprocess.h)
-target_include_directories(DarkFlat PRIVATE ${INCLUDE_DIR} ${INCLUDE_lIB_DIR}  ${INTEL_FFTW_INCLUDE} ${FFTW})
-target_link_libraries(DarkFlat $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib  ${INTEL_FFTWLINKLIB} ${FFTWLINK})
+target_include_directories(DarkFlat PRIVATE ${INCLUDE_DIR} ${INCLUDE_lIB_DIR}  ${INTEL_FFTW_INCLUDE} ${FFTW} ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(DarkFlat $ENV{FLISDK_DIR}/lib/release/FliSdk.lib ${INCLUDE_lIB_DIR}/NIDAQmx.lib  ${INTEL_FFTWLINKLIB} ${FFTWLINK} ${OpenCV_LIBS})
 
 add_executable(VoltageTest voltage_test.cpp utilheaders.h utils.cpp)
 target_include_directories(VoltageTest PRIVATE ${INCLUDE_DIR} ${INCLUDE_lIB_DIR} )
