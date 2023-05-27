@@ -64,6 +64,9 @@ inline tuple<double, double> getImageShift(
         double *CurrentImage, fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, uint64_t curr_count,
         uint64_t* imageSaveCounter, int fpsCamera, int imageSaveAfterSecond,
+        uint64_t* counter, bool* updateReference,
+        uint32_t autoGuiderCounter, bool autoGuiderHappening,
+        uint64_t NREFRESH, uint64_t* NumRefImage,
         bool useCameraFlat, int flatIndice, int showLive
         );
 inline void bin_separately(uint16_t* const image, uint16_t* const binned_image);
@@ -365,7 +368,10 @@ inline tuple<double, double> getImageShift(
         fftw_complex *CurrentImageFT,
         fftw_complex *CorrelatedImageFT, double *CorrelatedImage, uint64_t curr_count,
         uint64_t *imageSaveCounter, int fpsCamera,
-        int imageSaveAfterSecond, bool useCameraFlat = true, int flatIndice = 0,
+        int imageSaveAfterSecond, uint64_t* counter, bool* updateReference,
+        uint32_t autoGuiderCounter, bool autoGuiderHappening,
+        uint64_t NREFRESH, uint64_t* NumRefImage,
+        bool useCameraFlat = true, int flatIndice = 0,
         int showLive = 0
         ) {
 
@@ -393,7 +399,6 @@ inline tuple<double, double> getImageShift(
         if (!(curr_count & ((1 << 4) - 1))) {
             unique_lock<mutex> dul(displayMutex);
             displayReady = true;
-//            displayCount = curr_count;
             dul.unlock();
             displayConditionalVariable.notify_one();
         }
@@ -427,10 +432,6 @@ inline tuple<double, double> getImageShift(
 
 
     ComputeForward(CurrentImage, CurrentImageFT);
-//    FILE *fp;
-//    fopen_s(&fp, fname.c_str(), "wb");
-//    fwrite(CurrentImageFT, sizeof(*CurrentImageFT), NPIXFT, fp);
-//    fclose(fp);
 
     for (unsigned int i=0; i<NPIXFT; i++){
         CorrelatedImageFT[i][0] = CurrentImageFT[i][0]*ReferenceImageFT[i][0] + CurrentImageFT[i][1]*ReferenceImageFT[i][1];
@@ -442,6 +443,19 @@ inline tuple<double, double> getImageShift(
 
     XYIND = getSubPixelShift(CorrelatedImage, MAXIND); // Sub-pixel interpolation
 
+    if (
+            (*counter > NREFRESH || *updateReference) &&
+            (autoGuiderCounter == 0 && !autoGuiderHappening) &&
+            (
+                (fabs(get<0>(XYIND)) <= 0.03) &&
+                (fabs(get<1>(XYIND)) <= 0.03)
+            )
+       )  {
+        ComputeForward(CurrentImage, ReferenceImageFT);
+        *counter = 0;
+        *updateReference = false;
+        *NumRefImage += 1;
+    }
     return XYIND;
 }
 

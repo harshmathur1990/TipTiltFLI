@@ -10,6 +10,9 @@ double AA00, AA01, AA10, AA11;
 double autoGuiderOffloadLimitX, autoGuiderOffloadLimitY;
 int autoGuiderCorrectionTime;
 int imageSaveAfterSecond;
+bool autoPMode;
+double minKp, maxKp, minKd, maxKd;
+double mp, cp, md, cd;
 
 extern FliSdk* fli;
 extern uint16_t width, height;
@@ -59,6 +62,8 @@ string NucMode;
 uint16_t* image;
 uint16_t *binnedImage;
 uint32_t *MeanImage;
+
+double cutOffFrequencyOfDerivativeError;
 
 bool displayReady;
 mutex displayMutex;

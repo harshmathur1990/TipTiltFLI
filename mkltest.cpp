@@ -123,7 +123,7 @@ int getFFTWPlans(DFTI_DESCRIPTOR_HANDLE *descHandle){
 
     strides[0] = 0;
     strides[1] = 1;
-    strides[3] = NN / 2;
+    strides[3] = (NN / 2) + 1;
 
     status = DftiSetValue(*descHandle, DFTI_OUTPUT_STRIDES, strides);
     if (status != 0) {

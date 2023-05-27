@@ -38,7 +38,7 @@ double limMax;
 /* Integrator limits */
 double limMinInt;
 double limMaxInt;
-
+bool autoPMode;
 /* Sample time (in seconds) */
 double sampleTime;
 int (*loggingfunc) (std::string) = NULL;
@@ -60,6 +60,10 @@ int liveView;
 bool useCameraFlat;
 string NucMode;
 double autoGuiderVoltX, autoGuiderVoltY;
+double minKp, maxKp, minKd, maxKd;
+double mp, cp, md, cd;
+
+double cutOffFrequencyOfDerivativeError;
 
 int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE);
 
@@ -307,6 +311,12 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
         fy = YShift;
     }
     flatFrameIndice = get_flat_indice(fx, fy);
+    uint64_t counter = 0;
+    bool updateReference = false;
+    uint32_t autoGuiderCounter=600;
+    bool autoGuiderHappening = true;
+    uint64_t NREFRESH = 100;
+    uint64_t NumRefImage = 100;
     // Subsequent images
     for (i = 1; i < NFRAMES; i++) {
         shift_x=0;
@@ -322,7 +332,10 @@ int doCalib(int NFRAMES, int NUM_FRAME_PER_CALIB_POS, int AXIS, int MODE){
                     binnedImage,
                     CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, ll,
                     NULL, 0, 0,
-                    true, flatFrameIndice);
+                    &counter, &updateReference,
+                    autoGuiderCounter, autoGuiderHappening,
+                    NREFRESH, &NumRefImage,
+                    true, flatFrameIndice, 0);
             shift_x += get<0>(XYIND);
             shift_y += get<1>(XYIND);
 //            fopen_s(&fp, fname.c_str(), "wb");

@@ -57,6 +57,12 @@ extern int liveView;
 extern bool useCameraFlat;
 extern string NucMode;
 
+extern bool autoPMode;
+extern double minKp, maxKp, minKd, maxKd;
+extern double mp, cp, md, cd;
+
+extern double cutOffFrequencyOfDerivativeError;
+
 /* Sample time (in seconds) */
 extern double sampleTime;
 extern int (*loggingfunc) (std::string);
@@ -434,6 +440,48 @@ int getCalibrationMatrix(){
     else NucMode = "Bias";
 
     sprintf(logString, "useCameraFlat, NucMode: %d, %s", useCameraFlat, NucMode.c_str());
+    log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    int hpmode = stoi(Value);
+
+    if (hpmode) autoPMode = true;
+    else autoPMode = false;
+
+    sprintf(logString, "hpmode, autoPMode: %d, %d", hpmode, autoPMode);
+    log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    minKp = stod(Value);
+    getline(Row, Value, ',');
+    maxKp = stod(Value);
+    getline(Row, Value, ',');
+    minKd = stod(Value);
+    getline(Row, Value, ',');
+    maxKd = stod(Value);
+
+    sprintf(logString, "minKp, maxKp, minKd, maxKd: %lf, %lf, %lf, %lf", minKp, maxKp, minKd, maxKd);
+    log(logString);
+
+    mp = (maxKp - minKp) / (20 - 0.01);
+    cp = maxKp - mp * 20;
+
+    md = (maxKd - minKd) / (maxKp - minKp);
+    cd = maxKd - md * maxKp;
+
+    sprintf(logString, "mp, cp, md, cd: %lf, %lf, %lf, %lf", mp, cp, md, cd);
+    log(logString);
+
+    getline(calmat, Line, '\n');
+    Row = stringstream(Line);
+    getline(Row, Value, ',');
+    cutOffFrequencyOfDerivativeError = stod(Value);
+
+    sprintf(logString, "cutOffFrequencyOfDerivativeError: %lf", cutOffFrequencyOfDerivativeError);
     log(logString);
 
     calmat.close();

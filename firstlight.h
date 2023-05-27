@@ -36,7 +36,7 @@ public:
                                  int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY,
                                  uint64_t *imageSaveCounter, double *integralVoltX, double * integralVoltY,
                                  bool *updateReference, bool *offloadShiftsToAutoguider, uint32_t* autoGuiderCounter,
-                                 double* meanVoltX, double* meanVoltY
+                                 double* meanVoltX, double* meanVoltY, double* previousErrorX, double* previousErrorY
             ), uint64_t NREFERESH, double XShift, double YShift,
             int ACQMODE, int AUTOGUIDERMODE,
             int imageSaveAfterSecond):
@@ -56,7 +56,7 @@ public:
             rotatingCounter(0), sumX(0), sumY(0), AUTOGUIDERMODE(AUTOGUIDERMODE),
             imageSaveCounter(0), integralVoltX(0), integralVoltY(0), updateReference(true),
             autoGuiderCounter(fpsCamera), offloadShiftsToAutoguider(false),
-            meanVoltX(0), meanVoltY(0)
+            meanVoltX(0), meanVoltY(0), previousErrorX(0), previousErrorY(0)
     {
         if (MODE == INTEL_FFT) {
             int alignment=64;
@@ -94,7 +94,7 @@ public:
                 printStats = false;
                 cout << "error_no: "<< error_no << endl;
             }
-            cout << "FPS: "<< fps << " XShift: "<< XShift<< " YShift: "<< YShift<< " sumX: "<< sumX<< " sumY: "<<sumY<< " _nbImagesReceived :" << _nbImagesReceived << "\r";
+            cout << "FPS: "<< fps << " Vx: "<< XShift<< " Vy: "<< YShift<< " _nbImagesReceived :" << _nbImagesReceived << " NumRefImage: "<<NumRefImage<<"\r";
             cout.flush();
         }
         this->imagePointer = (uint16_t *) image;
@@ -109,7 +109,8 @@ public:
             CurrentImage, CurrentImageFT, CorrelatedImageFT, CorrelatedImage, fpsCamera,
             binnedImage, ACQMODE, &rotatingCounter, &sumX, &sumY, AUTOGUIDERMODE, &sumVoltageX,
             &sumVoltageY, &imageSaveCounter, &integralVoltX, &integralVoltY, &updateReference,
-            &offloadShiftsToAutoguider, &autoGuiderCounter, &meanVoltX, &meanVoltY
+            &offloadShiftsToAutoguider, &autoGuiderCounter, &meanVoltX, &meanVoltY,
+            &previousErrorX, &previousErrorY
         );
 
     }
@@ -160,7 +161,7 @@ private:
         int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY,
         uint64_t *imageSaveCounter, double *integralVoltX, double * integralVoltY,
         bool *updateReference, bool *offloadShiftsToAutoguider, uint32_t* autoGuiderCounter,
-        double* meanVoltX, double* meanVoltY
+        double* meanVoltX, double* meanVoltY, double* previousErrorX, double* previousErrorY
     ) = NULL;
     chrono::high_resolution_clock::time_point t0, t1;
     chrono::duration<double> dt;
@@ -182,6 +183,7 @@ private:
     uint64_t imageSaveCounter;
     uint32_t autoGuiderCounter;
     double meanVoltX, meanVoltY;
+    double previousErrorX, previousErrorY;
 };
 
 int initDev(double askfps=0, double asktemp=0, string NucMode="BiasFlat") {
@@ -236,14 +238,20 @@ int initDev(double askfps=0, double asktemp=0, string NucMode="BiasFlat") {
     fli->cblueOne()->ExposureMode->setValue(FliSfncCameraEnum::ExposureModeEnum::Timed);
 //    fli->cblueOne()->E
 
-    cout << "OffsetX: "<< fli->cblueOne()->OffsetX->getValue()<<endl;
-    cout << "OffsetY: "<< fli->cblueOne()->OffsetY->getValue()<<endl;
+
 
     uint16_t offsetX=250, offsetY=0;
-    cout <<"Enter offseX: "<<endl;
-    cin>>offsetX;
-    cout <<"Enter offseY: "<<endl;
-    cin>>offsetY;
+
+    offsetX = fli->cblueOne()->OffsetX->getValue();
+    offsetY = fli->cblueOne()->OffsetY->getValue();
+
+    cout << "OffsetX: "<< offsetX <<endl;
+    cout << "OffsetY: "<< offsetY <<endl;
+
+//    cout <<"Enter offseX: "<<endl;
+//    cin>>offsetX;
+//    cout <<"Enter offseY: "<<endl;
+//    cin>>offsetY;
     fli->cblueOne()->Width->setValue(WIDTH);
     fli->cblueOne()->Height->setValue(HEIGHT);
     fli->cblueOne()->OffsetX->setValue(offsetX);
@@ -256,10 +264,11 @@ int initDev(double askfps=0, double asktemp=0, string NucMode="BiasFlat") {
 
     fli->cblueOne()->setStringFeature("UserSetSelector", "UserSet0");
 
-    double fps = fli->cblueOne()->AcquisitionFrameRate->getValue();
-    double input=-1;
-    cout << "Fps read: " << fps << endl;
+    double fps=0;
     if (askfps > 0) {
+        fps = fli->cblueOne()->AcquisitionFrameRate->getValue();
+        double input = -1;
+        cout << "Fps read: " << fps << endl;
         while(input < 0) {
             cout << "Enter fps (<="<< fps <<"): " << endl;
             cin>>input;
@@ -268,6 +277,12 @@ int initDev(double askfps=0, double asktemp=0, string NucMode="BiasFlat") {
         fps = fli->cblueOne()->AcquisitionFrameRate->getValue();
         cout << "Fps read: " << fps << endl;
         input = -1;
+    }
+    else {
+        fps = fli->cblueOne()->AcquisitionFrameRate->getMax();
+        fli->cblueOne()->AcquisitionFrameRate->setValue(fps);
+        fps = fli->cblueOne()->AcquisitionFrameRate->getValue();
+        cout << "Fps read: " << fps << endl;
     }
 
     double exp = fli->cblueOne()->ExposureTime->getValue();

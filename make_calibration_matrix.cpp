@@ -129,10 +129,20 @@ int main(){
     ofstream cm("CalibrationMatrix.csv");
     cm << A00 << "," << A10 << "," << A01 << "," << A11 << endl;
     cm << Slope_xVx << "," << Slope_yVx << "," << Slope_xVy << "," << Slope_yVy << endl;
-    cm << "0.0, 0.0, 5.0" << endl; // Default Vxoffset, Vyoffset, Slew rate,
-    cm << "0.5, 0.5, 0.0" << endl; // Kp, Kd and Ki
-    cm << "300, 5" << endl; // Ni, nd
-    cm << "3, 5" << endl; // COM ports
+    cm << "60.0, 60.0, 200.0" << endl; // Default Vxoffset, Vyoffset, Slew rate,
+    cm << "0.2, 0.00, 0.0" << endl; // Kp, Kd and Ki
+    cm << "-1, -1" << endl; // Ni, nd
+    cm << "-25.53, 3.70, -5.92, -28.12" << endl; // AutoGuider Calibration Matrix
+    cm << "0.0015, -10, 10, -10, 10, 0.00152" << endl; // Limit of Corrections of Tip Tilt in pixels
+    cm << "0.5, 0, 0.0" << endl; // AutoGuider Kp, Kd and Ki
+    cm << "15" << endl; // Auto Guider close loop time withour tip tilt
+    cm << "60" << endl; // Image save to disk after seconds
+    cm << "5, 10"<<endl; // Offload to Autoguider after voltage deviates from base voltage in X and Y
+    cm << "1" << endl; // Show Live view (1: ON, 0: OFF)
+    cm << "1" << endl; // Assume Camera does Flat Fielding
+    cm << "1" << endl; // Enable auto P mode of Proportional counter during Autoguider corrections
+    cm << "0.2, 0.4, 0.001, 0.01" << endl; // minKp, maxKp, minKd, maxKd in Auto P mode
+    cm << "110" << endl; // cutOffFrequencyOfDerivativeError
     cm.close();
 
     ifstream calmat("CalibrationMatrix.csv");

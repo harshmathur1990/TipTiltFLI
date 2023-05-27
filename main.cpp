@@ -5,8 +5,8 @@
 #include <mutex>
 #include "utilheaders.h"
 #include "motorcontrols.h"
-#include "pid.h"
 #include <thread>
+#include "Butterworth.h"
 
 using namespace std;
 
@@ -32,14 +32,14 @@ double limMax;
 /* Integrator limits */
 double limMinInt;
 double limMaxInt;
+double minKp, maxKp, minKd, maxKd;
+double mp, cp, md, cd;
 
 /* Sample time (in seconds) */
 double sampleTime;
 int liveView;
 bool useCameraFlat;
 string NucMode;
-PIDController pidX;
-PIDController pidY;
 char logString[100000],  logString_2[100000], logString_3[100000];
 int (*loggingfunc) (std::string) = NULL;
 bool tipTiltReady = false, autoGuiderReady = false;
@@ -53,6 +53,12 @@ mutex displayMutex;
 deque<double**> displayQueue;
 std::condition_variable displayConditionalVariable;
 uint64_t displayCount;
+bool autoPMode;
+Butterworth butterworth;
+vector <Biquad> coeffs;  // second-order sections (sos)
+BiquadChain chain;
+double cutOffFrequencyOfDerivativeError;
+double *lowPassFilteredDervativeX = NULL, *lowPassFilteredDervativeY = NULL;
 
 inline void closedLoopCallBack(uint16_t* const Image, uint64_t nbImagesReceived, double* binImgTime, double* imgWriteTime,
                         double* imgShiftTime, double* calcCorrectionTime, double* applyCorrectionTime,
@@ -68,18 +74,16 @@ inline void closedLoopCallBack(uint16_t* const Image, uint64_t nbImagesReceived,
                         int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY,
                         uint64_t *imageSaveCounter, double *integralVoltX, double *integralVoltY,
                         bool *updateReference, bool *offloadShiftsToAutoguider, uint32_t* autoGuiderCounter,
-                        double* meanVoltX, double* meanVoltY);
+                        double* meanVoltX, double* meanVoltY, double* previousErrorX, double* previousErrorY);
 inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErrorX, deque<double> &integralErrorY,
                   deque<double> &derivativeErrorX, deque<double> &derivativeErrorY, uint64_t *integralCounter,
                   uint64_t *derivativeCounter, double *correctionX, double *correctionY,
-                  uint64_t curr_count, uint64_t nbImagesReceived
+                  uint64_t curr_count, uint64_t nbImagesReceived, double* previousErrorX, double* previousErrorY
 );
 [[noreturn]] DWORD WINAPI closedLoopVoltageThread(LPVOID lparam);
 [[noreturn]] DWORD WINAPI closedLoopAutoGuiderThread(LPVOID lparam);
 [[noreturn]] DWORD WINAPI displayThread(LPVOID lparam);
 
-MKL_LONG counterImager=0;
-double totalBinTime=0;
 
 int main () {
     float XShift, YShift;
@@ -102,7 +106,7 @@ int main () {
     sprintf(logString, "Initializing devices and acquiring one-time data");
     log(logString);
     cout << "Searching for the cameras... " << endl;
-	Err = initDev(1, 0, NucMode);
+	Err = initDev(0, 0, NucMode);
 	if (Err != 0) {
 	    exit(Err);
 	}
@@ -119,18 +123,25 @@ int main () {
     cout << "Loading the calibration matrix... " << endl;
 
 
-    pidX = {Kp, Ki, Kd,
-                         tau,
-                         limMin, limMax,
-                         limMinInt, limMaxInt,
-                         sampleTime };
-    pidY = {Kp, Ki, Kd,
-                          tau,
-                          limMin, limMax,
-                          limMinInt, limMaxInt,
-                          sampleTime };
-    PIDController_Init(&pidX);
-    PIDController_Init(&pidY);
+    int filterOrder = 8;
+    double overallGain = 1;
+
+    if (Nd > 0) {
+        butterworth.loPass(
+            fpsCamera,
+            cutOffFrequencyOfDerivativeError,
+            0,
+            filterOrder,
+            coeffs,
+            overallGain
+        );
+
+        chain.allocate(coeffs.size());
+        chain.reset();
+
+        lowPassFilteredDervativeX = new double[Nd];
+        lowPassFilteredDervativeY = new double[Nd];
+    }
     // Go to offset point
     loggingfunc = oplog_write;
     sendCommand(XPort, "set,0,-20.0");
@@ -239,6 +250,14 @@ int main () {
             autoGuiderConditionalVariable.wait(aul, [](){return !autoGuiderReady;});
             aul.unlock();
         }
+        if ((slopeString[0] == 'm') || (slopeString[0] == 'm')) {
+            cout << "Enter AKp" << endl;
+            cin>>Akp;
+            cout << "Enter AKi" << endl;
+            cin>>Aki;
+            cout << "Enter AKd" << endl;
+            cin>>Akd;
+        }
     }
     stopCamera();
     CloseHandle(tipTiltHandle);
@@ -267,26 +286,27 @@ int main () {
 	return 0;
 }
 
-inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErrorX, deque<double> &integralErrorY,
-                  deque<double> &derivativeErrorX, deque<double> &derivativeErrorY, uint64_t *integralCounter, uint64_t *derivativeCounter,
-                  double *correctionX, double *correctionY, uint64_t curr_count, uint64_t nbImagesReceived
+inline int getCorrection(
+        double XTemp, double YTemp, deque<double> &integralErrorX,
+        deque<double> &integralErrorY, deque<double> &derivativeErrorX,
+        deque<double> &derivativeErrorY, uint64_t *integralCounter,
+        uint64_t *derivativeCounter, double *correctionX, double *correctionY,
+        uint64_t curr_count, uint64_t nbImagesReceived,
+        double* previousErrorX, double* previousErrorY
 ) {
-    uint64_t i;
     double toCorrectXTemp, toCorrectYTemp;
-    double xMean =  (double) (Nd + 1) / (double) 2;
-    double xixbaryiybarX = 0, xixbaryiybarY = 0;
-    double xixbarsq = 0;
     double integralErrorVoltageX = 0;
     double integralErrorVoltageY = 0;
     double derivativeErrorVoltageX = 0;
     double derivativeErrorVoltageY = 0;
 
-    toCorrectXTemp = -1 * XTemp;
+    toCorrectXTemp = -1 * XTemp; // multiplied by -1, because error is set point minus measured value
     toCorrectYTemp = -1 * YTemp;
 
     double correctionShiftX, correctionShiftY;
 
     if (Ni > 0) {
+        // keep records of last Ni errors
         if (integralErrorX.size() == Ni) {
             integralErrorX.pop_front();
             integralErrorY.pop_front();
@@ -303,6 +323,9 @@ inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErro
         }
     }
     else {
+        // keep record of just the total sum of errors and
+        // store it in the queue.
+        // That is, queue contains only one element, the total sum.
         if (integralErrorX.empty()) {
             integralErrorX.push_back(toCorrectXTemp);
             integralErrorY.push_back(toCorrectYTemp);
@@ -323,39 +346,42 @@ inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErro
         }
     }
 
-    if (derivativeErrorX.size() == Nd) {
-        derivativeErrorX.pop_front();
-        derivativeErrorY.pop_front();
+    if (Nd == 0) {
+        // If Nd is 0, the derivative is simply current minus previous error
+        derivativeErrorVoltageX = toCorrectXTemp - *previousErrorX;
+        derivativeErrorVoltageY = toCorrectYTemp - *previousErrorY;
     }
-    derivativeErrorX.push_back(toCorrectXTemp);
-    derivativeErrorY.push_back(toCorrectYTemp);
+    else if (Nd > 0) {
+        // If Nd is greater than zero, keep records of last Nd errors.
+        // apply low pass filter with cut-off frequency 110 Hz
+        // emit last element as the derivative error.
+        if (derivativeErrorX.size() == Nd) {
+            derivativeErrorX.pop_front();
+            derivativeErrorY.pop_front();
+        }
 
-    if (derivativeErrorX.size() < Nd) {
+        derivativeErrorX.push_back(toCorrectXTemp - *previousErrorX);
+        derivativeErrorY.push_back(toCorrectYTemp - *previousErrorY);
+
+        if (derivativeErrorX.size() < Nd) {
+            derivativeErrorVoltageX = 0;
+            derivativeErrorVoltageY = 0;
+        }
+        else {
+            chain.processBiquad(derivativeErrorX, lowPassFilteredDervativeX, 1, Nd, coeffs.data());
+            chain.processBiquad(derivativeErrorY, lowPassFilteredDervativeY, 1, Nd, coeffs.data());
+            derivativeErrorVoltageX = lowPassFilteredDervativeX[Nd - 1];
+            derivativeErrorVoltageY = lowPassFilteredDervativeY[Nd - 1];
+        }
+    }
+    else {
+        // no derivative error if Nd is negative
         derivativeErrorVoltageX = 0;
         derivativeErrorVoltageY = 0;
     }
-    else {
-        double meanDerivativeErrorVoltageX = 0;
-        double meanDerivativeErrorVoltageY = 0;
 
-        meanDerivativeErrorVoltageX = accumulate(derivativeErrorX.end()-Nd, derivativeErrorX.end(), 0.0) / Nd;
-        meanDerivativeErrorVoltageY = accumulate(derivativeErrorY.end()-Nd, derivativeErrorY.end(), 0.0) / Nd;
-
-        i = 0;
-        for (auto it=derivativeErrorX.cbegin(); it!=derivativeErrorX.cend(); it++) {
-            xixbaryiybarX += (*it - meanDerivativeErrorVoltageX) * (i + 1 - xMean);
-            xixbarsq += ((i + 1 - xMean) * (i + 1 - xMean));
-            i += 1;
-        }
-        i = 0;
-        for(auto it=derivativeErrorY.cbegin(); it!=derivativeErrorY.cend(); it++){
-            xixbaryiybarY += (*it - meanDerivativeErrorVoltageY) * (i + 1 - xMean);
-            i += 1;
-        }
-
-        derivativeErrorVoltageX = xixbaryiybarX / xixbarsq;
-        derivativeErrorVoltageY = xixbaryiybarY / xixbarsq;
-    }
+    *previousErrorX = toCorrectXTemp;
+    *previousErrorY = toCorrectYTemp;
 
     double integralContributionX = Ki * integralErrorVoltageX;
     double integralContributionY = Ki * integralErrorVoltageY;
@@ -372,38 +398,46 @@ inline int getCorrection(double XTemp, double YTemp, deque<double> &integralErro
     if (integralContributionY >= limMaxInt) {
         integralContributionY = limMaxInt;
     }
-    correctionShiftX = Kp * toCorrectXTemp + integralContributionX + Kd * derivativeErrorVoltageX;
-    correctionShiftY = Kp * toCorrectYTemp + integralContributionX + Kd * derivativeErrorVoltageY;
 
-    if (correctionShiftX <= limMin) {
-        correctionShiftX = limMin;
+    double usedKp = Kp;
+    double usedKd = Kd;
+
+    if (autoPMode) {
+        usedKp = max(fabs(toCorrectXTemp), fabs(toCorrectYTemp)) * mp + cp;
+        if (usedKp >= maxKp) usedKp = maxKp;
+        usedKd = md * usedKp + cd;
+        if (usedKd >= maxKd) usedKd = maxKd;
     }
-    if (correctionShiftX >= limMax) {
-        correctionShiftX = limMax;
+
+    correctionShiftX = usedKp * toCorrectXTemp + integralContributionX + usedKd * derivativeErrorVoltageX;
+    correctionShiftY = usedKp * toCorrectYTemp + integralContributionX + usedKd * derivativeErrorVoltageY;
+
+    double usedLimMin = limMin;
+    double usedLimMax = limMax;
+
+    if (correctionShiftX <= usedLimMin) {
+        correctionShiftX = usedLimMin;
     }
-    if (correctionShiftY <= limMin) {
-        correctionShiftY = limMin;
+    if (correctionShiftX >= usedLimMax) {
+        correctionShiftX = usedLimMax;
     }
-    if (correctionShiftY >= limMax) {
-        correctionShiftY = limMax;
+    if (correctionShiftY <= usedLimMin) {
+        correctionShiftY = usedLimMin;
     }
-//    PIDController_Update(&pidX, 0, toCorrectXTemp);
-//    PIDController_Update(&pidY, 0, toCorrectYTemp);
+    if (correctionShiftY >= usedLimMax) {
+        correctionShiftY = usedLimMax;
+    }
 
     *correctionX = A00*correctionShiftX + A01*correctionShiftY;
     *correctionY = A10*correctionShiftX + A11*correctionShiftY;
 
-//    *correctionX = A00 * pidX.out + A01 * pidY.out;
-//    *correctionY = A10 * pidX.out + A11 * pidY.out;
-
-//    sprintf(logString, "%ld, %ld, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf", curr_count, nbImagesReceived, toCorrectXTemp, toCorrectYTemp, pidX.integrator, pidY.integrator, pidX.differentiator, pidY.differentiator, pidX.out, pidY.out, *correctionX, *correctionY);
     sprintf(
         logString,
-        "%ld, %ld, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf",
+        "%ld, %ld, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf, %lf",
         curr_count, nbImagesReceived, toCorrectXTemp, toCorrectYTemp,
         integralContributionX, integralContributionY, derivativeErrorVoltageX,
         derivativeErrorVoltageY, correctionShiftX, correctionShiftY,
-        *correctionX, *correctionY
+        *correctionX, *correctionY, usedKp
     );
     shift_uncorected_log(logString);
     return 0;
@@ -425,7 +459,7 @@ inline void closedLoopCallBack(
         double *sumX, double *sumY, int AUTOGUIDERMODE, double *sumVoltageX, double *sumVoltageY,
         uint64_t *imageSaveCounter, double *integralVoltX, double *integralVoltY,
         bool *updateReference, bool *offloadShiftsToAutoguider, uint32_t* autoGuiderCounter,
-        double* meanVoltX, double* meanVoltY
+        double* meanVoltX, double* meanVoltY, double* previousErrorX, double* previousErrorY
         )
 {
 
@@ -433,6 +467,7 @@ inline void closedLoopCallBack(
         return;
     }
     if (*autoGuiderCounter > 0) *autoGuiderCounter -= 1;
+
     tuple<double, double> XYIND;
     double XTemp, YTemp;
     double correctionX, correctionY;
@@ -478,8 +513,8 @@ inline void closedLoopCallBack(
             int autoCorX = int(AA00 * pixelShiftX + AA01 * pixelShiftY);
             int autoCorY = int(AA10 * pixelShiftX + AA11 * pixelShiftY);
 
-            int waitTimeInSeconds = 1;
-            int multiplier = *offloadShiftsToAutoguider?waitTimeInSeconds:autoGuiderCorrectionTime;
+//            int multiplier = *offloadShiftsToAutoguider?waitTimeInSeconds:autoGuiderCorrectionTime;
+            int multiplier = 1;
             int limiter = multiplier * 350;
             if (autoCorX > limiter) {
                 autoCorX = limiter;
@@ -503,6 +538,8 @@ inline void closedLoopCallBack(
             aul.unlock();
 
             *offloadShiftsToAutoguider = false;
+            int waitTimeInSeconds = 1;
+//            waitTimeInSeconds += 1;
             *autoGuiderCounter = waitTimeInSeconds * fpsCamera;
             sprintf(
                     logString_3,
@@ -514,12 +551,7 @@ inline void closedLoopCallBack(
         }
     }
 
-    if (
-            !*NumRefImage || (
-                 (*counter > NREFRESH || *updateReference) &&
-                 (*autoGuiderCounter == 0 && !autoGuiderHappening)
-            )
-       ) {
+    if (!*NumRefImage){
         *NumRefImage += 1;
         processReferenceImage(binnedImage);
         *counter = 0;
@@ -532,6 +564,9 @@ inline void closedLoopCallBack(
                 CurrentImage, CurrentImageFT, CorrelatedImageFT,
                 CorrelatedImage, *curr_count,
                 imageSaveCounter, fpsCamera, imageSaveAfterSecond,
+                counter, updateReference, *autoGuiderCounter,
+                autoGuiderHappening,
+                NREFRESH, NumRefImage,
                 useCameraFlat, flatIndice, liveView);
         XTemp = get<0>(XYIND);
         YTemp = get<1>(XYIND);
@@ -541,7 +576,8 @@ inline void closedLoopCallBack(
 
         getCorrection(XTemp, YTemp, integralErrorX, integralErrorY,
                       derivativeErrorX, derivativeErrorY, integralCounter, derivativeCounter,
-                      &correctionX, &correctionY, *curr_count, nbImagesReceived
+                      &correctionX, &correctionY, *curr_count, nbImagesReceived,
+                      previousErrorX, previousErrorY
         );
 
         if (ACQMODE == 1) {
@@ -561,10 +597,19 @@ inline void closedLoopCallBack(
             if (*error_no == 0) {
                 *XShift += correctionX;
                 *YShift += correctionY;
-                if (*rotatingCounter == fpsCamera) {
+                double instantErrorX = fabs(*XShift - Vxoff);
+                double instantErrorY = fabs(*YShift - Vyoff);
+                if (
+                        *rotatingCounter == fpsCamera ||
+                        instantErrorX > 40 ||
+                        instantErrorY > 40
+                   ) {
                     *meanVoltX = (*sumVoltageX / (*rotatingCounter + 1)) - Vxoff;
                     *meanVoltY = (*sumVoltageY / (*rotatingCounter + 1)) - Vyoff;
-                    if ((fabs(*meanVoltX) > autoGuiderOffloadLimitX) || (fabs(*meanVoltY) > autoGuiderOffloadLimitY)){
+                    if (
+                            (fabs(*meanVoltX) > autoGuiderOffloadLimitX) ||
+                            (fabs(*meanVoltY) > autoGuiderOffloadLimitY)
+                       ){
                         if ((*autoGuiderCounter == 0) && !*offloadShiftsToAutoguider) {
                             *offloadShiftsToAutoguider = true;
                             *updateReference = false;
@@ -656,7 +701,6 @@ inline void closedLoopCallBack(
     while (true) {
         unique_lock<mutex> dul(displayMutex);
         displayConditionalVariable.wait(dul, [](){return displayReady;});
-//        count = displayCount;
         displayReady = false;
         dul.unlock();
         for (unsigned i=0;i < NX * NY; i++) {
@@ -670,15 +714,10 @@ inline void closedLoopCallBack(
         max = max - min;
         multiplyFactor = 1 / max;
         for (unsigned i=0;i < NX * NY; i++) {
-            imageEightBit[i] = 255 * image64Bit[i] * multiplyFactor;
+            imageEightBit[i] = UCHAR_MAX * image64Bit[i] * multiplyFactor;
         }
         const cv::Mat img(cv::Size(NX, NY), CV_8UC1, imageEightBit);
         cv::imshow("Live!", img);
         cv::waitKey(10);
-//        FILE *fp;
-//        string fname = string(SAVEPATH) + "//Curr_" +  to_string(count) + ".dat";
-//        fopen_s(&fp, fname.c_str(), "wb");
-//        fwrite(image64Bit, sizeof(*image64Bit), NX * NY, fp);
-//        fclose(fp);
     }
 }

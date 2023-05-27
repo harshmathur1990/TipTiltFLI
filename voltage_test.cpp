@@ -59,6 +59,11 @@ std::condition_variable displayConditionalVariable;
 int liveView;
 bool useCameraFlat;
 string NucMode;
+bool autoPMode;
+double minKp, maxKp, minKd, maxKd;
+double mp, cp, md, cd;
+double cutOffFrequencyOfDerivativeError;
+
 
 int main() {
     setupLogging(3);
